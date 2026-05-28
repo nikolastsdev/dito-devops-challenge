@@ -41,6 +41,9 @@ module "gke" {
 
   release_channel = "REGULAR"
 
+  # Staging pode ser destruído via pipeline; production fica protegido
+  deletion_protection = var.environment == "production"
+
   remove_default_node_pool = true
 
   node_pools = [

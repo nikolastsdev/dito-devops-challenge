@@ -289,6 +289,12 @@ jobs:
             --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_STAGING }} 2>/dev/null || true
           kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
           kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
+      - name: Disable GKE deletion protection
+        run: |
+          gcloud container clusters update dito-gke-staging \
+            --region southamerica-east1 \
+            --project ${{ vars.GCP_PROJECT_ID_STAGING }} \
+            --no-deletion-protection 2>/dev/null || true
       - run: terraform init -backend-config=backends/staging.gcs.tfbackend -reconfigure
       - name: Terraform Destroy
         env:
@@ -327,6 +333,12 @@ jobs:
             --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }} 2>/dev/null || true
           kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
           kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
+      - name: Disable GKE deletion protection
+        run: |
+          gcloud container clusters update dito-gke-production \
+            --region southamerica-east1 \
+            --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }} \
+            --no-deletion-protection 2>/dev/null || true
       - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
       - name: Terraform Destroy
         env:
