@@ -201,7 +201,7 @@ flowchart TD
     Trigger --> DeployCheck{"ref == main?"}
     DeployCheck -->|sim| Deploy["Job: deploy<br/>environment: github-pages"]
     Deploy --> Pages["actions/deploy-pages@v4"]
-    Pages --> URL["nikolasschafer.github.io/dito-devops-challenge"]
+    Pages --> URL["nikolastsdev.github.io/dito-devops-challenge"]
     DeployCheck -->|PR| BuildOnly["apenas build — sem deploy"]
 ```
 

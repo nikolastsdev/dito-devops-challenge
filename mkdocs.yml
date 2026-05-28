@@ -1,8 +1,8 @@
 site_name: Dito DevOps Challenge
 site_description: Infraestrutura, GitOps e CI/CD — Desafio DevOps III
-site_url: https://nikolasschafer.github.io/dito-devops-challenge/
-repo_url: https://github.com/nikolasschafer/dito-devops-challenge
-repo_name: nikolasschafer/dito-devops-challenge
+site_url: https://nikolastsdev.github.io/dito-devops-challenge/
+repo_url: https://github.com/nikolastsdev/dito-devops-challenge
+repo_name: nikolastsdev/dito-devops-challenge
 edit_uri: edit/main/docs/
 
 theme:
@@ -97,4 +97,4 @@ markdown_extensions:
 extra:
   social:
     - icon: fontawesome/brands/github
-      link: https://github.com/nikolasschafer
+      link: https://github.com/nikolastsdev

@@ -23,7 +23,7 @@ Ou via GitHub UI: https://github.com/new → nome `dito-devops-challenge`
 2. Source: **GitHub Actions** (não "Deploy from branch")
 3. O workflow `docs.yml` publica automaticamente no push para `main`
 
-URL final: **https://nikolasschafer.github.io/dito-devops-challenge/**
+URL final: **https://nikolastsdev.github.io/dito-devops-challenge/**
 
 ## 3. Environments (approval gates)
 

@@ -198,7 +198,7 @@ GitHub Actions token  →  Google STS  →  SA de curta duração
 2. `google-github-actions/auth@v2` troca esse token no **Google STS**  
 3. O STS valida:  
    - Issuer: `https://token.actions.githubusercontent.com`  
-   - `attribute.repository == "nikolasschaffer/dito-devops-challenge"`  
+   - `attribute.repository == "nikolastsdev/dito-devops-challenge"`  
 4. STS retorna credenciais temporárias para o **CI Service Account**  
 5. O Terraform usa essas credenciais para operar no GCP  
 

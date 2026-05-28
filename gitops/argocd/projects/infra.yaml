@@ -10,7 +10,7 @@ spec:
     - https://helm.traefik.io/traefik
     - https://charts.external-secrets.io
     # Repo do desafio (manifests de config)
-    - https://github.com/nikolasschaffer/dito-devops-challenge
+    - https://github.com/nikolastsdev/dito-devops-challenge
   destinations:
     - namespace: traefik
       server: https://kubernetes.default.svc

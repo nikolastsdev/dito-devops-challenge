@@ -6,7 +6,7 @@ metadata:
 spec:
   description: Projeto GitOps — Groove app (Desafio DevOps Dito)
   sourceRepos:
-    - https://github.com/nikolasschaffer/dito-devops-challenge
+    - https://github.com/nikolastsdev/dito-devops-challenge
   destinations:
     - namespace: dito-app
       server: https://kubernetes.default.svc

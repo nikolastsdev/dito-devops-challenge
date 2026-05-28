@@ -30,11 +30,11 @@ enable_public_ingress = true
 ingress_hostname      = "" # ex.: groove-staging.seudominio.com.br
 dns_managed_zone      = "" # ex.: seudominio-com-br (zona no Cloud DNS)
 
-github_owner = "nikolasschaffer"
+github_owner = "nikolastsdev"
 github_repo  = "dito-devops-challenge"
 
 labels = {
-  owner       = "nikolasschafer"
+  owner       = "nikolastsdev"
   challenge   = "dito-devops-iii"
   environment = "staging"
 }

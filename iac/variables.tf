@@ -121,7 +121,7 @@ variable "labels" {
 variable "github_owner" {
   description = "Owner/organização do repositório GitHub (para WIF)"
   type        = string
-  default     = "nikolasschaffer"
+  default     = "nikolastsdev"
 }
 
 variable "github_repo" {

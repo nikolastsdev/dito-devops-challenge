@@ -10,7 +10,7 @@ Repositório de entrega do **Desafio DevOps III** — infraestrutura GCP, GitOps
 | [`app/`](app/) | API NestJS (TypeScript) + frontend React — app **Groove** (playlists) |
 | [`manifests/`](manifests/) | Kubernetes (Kustomize) + Workload Identity + External Secrets |
 | [`gitops/`](gitops/) | ArgoCD Applications |
-| [`docs/`](docs/) | MkDocs — [documentação publicada](https://nikolasschafer.github.io/dito-devops-challenge/) |
+| [`docs/`](docs/) | MkDocs — [documentação publicada](https://nikolastsdev.github.io/dito-devops-challenge/) |
 
 ---
 
@@ -139,4 +139,4 @@ Estimativa real (GCP Calculator): [`docs/runbook/budget-and-costs.md`](docs/runb
 
 ## Autor
 
-[Nikolass Schaffer](https://github.com/nikolasschaffer)
+[Nikolass Schaffer](https://github.com/nikolastsdev)

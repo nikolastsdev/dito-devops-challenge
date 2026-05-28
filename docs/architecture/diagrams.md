@@ -14,7 +14,7 @@ flowchart TB
         Budget["Billing Budget<br/>alertas e-mail BRL"]
     end
 
-    subgraph GitHub["GitHub — nikolasschafer/dito-devops-challenge"]
+    subgraph GitHub["GitHub — nikolastsdev/dito-devops-challenge"]
         Repo["Monorepo<br/>iac · app · manifests · gitops · docs"]
         GHA["GitHub Actions<br/>4 workflows"]
         Pages["GitHub Pages<br/>MkDocs"]

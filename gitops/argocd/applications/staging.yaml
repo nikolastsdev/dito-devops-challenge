@@ -12,7 +12,7 @@ spec:
   project: dito-challenge
 
   source:
-    repoURL: https://github.com/nikolasschaffer/dito-devops-challenge
+    repoURL: https://github.com/nikolastsdev/dito-devops-challenge
     targetRevision: main
     path: manifests/overlays/staging
 

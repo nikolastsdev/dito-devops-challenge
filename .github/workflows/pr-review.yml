@@ -64,7 +64,7 @@ jobs:
               '- `DB_PASSWORD` via Secret/ExternalSecret apenas',
               '- Imagens escaneadas com Trivy no workflow `app-build.yml`',
               '',
-              '> Documentação completa: [manifests-validation](https://nikolasschafer.github.io/dito-devops-challenge/ci-cd/manifests-validation/)',
+              '> Documentação completa: [manifests-validation](https://nikolastsdev.github.io/dito-devops-challenge/ci-cd/manifests-validation/)',
             ].join('\n');
             github.rest.issues.createComment({
               issue_number: context.issue.number,

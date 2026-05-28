@@ -29,11 +29,11 @@ enable_public_ingress = true
 ingress_hostname      = ""
 dns_managed_zone      = ""
 
-github_owner = "nikolasschaffer"
+github_owner = "nikolastsdev"
 github_repo  = "dito-devops-challenge"
 
 labels = {
-  owner       = "nikolasschafer"
+  owner       = "nikolastsdev"
   challenge   = "dito-devops-iii"
   environment = "production"
 }
