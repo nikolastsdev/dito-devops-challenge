@@ -96,6 +96,8 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   network                 = module.vpc.network_id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_service_range.name]
+  # GCP mantém referência órfã após Cloud SQL ser deletado — ABANDON evita destroy travado
+  deletion_policy         = "ABANDON"
 
   depends_on = [google_project_service.servicenetworking]
 
