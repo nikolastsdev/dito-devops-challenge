@@ -208,35 +208,14 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID_STAGING }}
           install_components: gke-gcloud-auth-plugin
-      - name: Get cluster credentials
-        run: |
-          gcloud container clusters get-credentials dito-gke-staging \
-            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_STAGING }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.17.3
-      - name: Install ArgoCD
+      - name: Bootstrap cluster (idempotente)
         run: |
-          helm repo add argo https://argoproj.github.io/argo-helm
-          helm repo update
-          helm upgrade --install argocd argo/argo-cd \
-            --namespace argocd --create-namespace \
-            --version ${{ env.ARGOCD_VERSION }} \
-            --set server.service.type=ClusterIP \
-            --set configs.params."server\.insecure"=true \
-            --wait --timeout 5m
-      - name: Apply AppProjects and Applications
-        run: |
-          kubectl apply -f gitops/argocd/projects/infra.yaml
-          kubectl apply -f gitops/argocd/projects/dito-challenge.yaml
-          kubectl apply -f gitops/argocd/applications/traefik-staging.yaml
-          kubectl apply -f gitops/argocd/applications/staging.yaml
-      - name: Show status
-        run: |
-          kubectl get applications -n argocd 2>/dev/null || true
-          kubectl get svc -n traefik 2>/dev/null || true
-          kubectl -n argocd get secret argocd-initial-admin-secret \
-            -o jsonpath='{.data.password}' 2>/dev/null | base64 -d && echo || true
+          sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
+          chmod +x scripts/bootstrap-cluster.sh
+          ./scripts/bootstrap-cluster.sh staging
 
   # ── 7. Bootstrap Cluster Production ──────────────────────────────────────────
   bootstrap-cluster-production:
@@ -255,33 +234,14 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
           install_components: gke-gcloud-auth-plugin
-      - name: Get cluster credentials
-        run: |
-          gcloud container clusters get-credentials dito-gke-production \
-            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
       - uses: azure/setup-helm@v4
         with:
           version: v3.17.3
-      - name: Install ArgoCD
+      - name: Bootstrap cluster (idempotente)
         run: |
-          helm repo add argo https://argoproj.github.io/argo-helm
-          helm repo update
-          helm upgrade --install argocd argo/argo-cd \
-            --namespace argocd --create-namespace \
-            --version ${{ env.ARGOCD_VERSION }} \
-            --set server.service.type=ClusterIP \
-            --set configs.params."server\.insecure"=true \
-            --wait --timeout 5m
-      - name: Apply AppProjects and Applications
-        run: |
-          kubectl apply -f gitops/argocd/projects/infra.yaml
-          kubectl apply -f gitops/argocd/projects/dito-challenge.yaml
-          kubectl apply -f gitops/argocd/applications/traefik-production.yaml
-          kubectl apply -f gitops/argocd/applications/production.yaml
-      - name: Show status
-        run: |
-          kubectl get applications -n argocd 2>/dev/null || true
-          kubectl get svc -n traefik 2>/dev/null || true
+          sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
+          chmod +x scripts/bootstrap-cluster.sh
+          ./scripts/bootstrap-cluster.sh production
 
   # ── 8. Destroy Staging ────────────────────────────────────────────────────────
   # Apenas dispatch manual — requer aprovação no GitHub Environment

@@ -29,13 +29,26 @@ spec:
           annotations:
             networking.gke.io/load-balancer-ip-addresses: "dito-traefik-staging"
 
-        # Porta HTTP 80 — HTTPS pode ser adicionado depois via cert-manager
+        # Portas HTTP (80) e HTTPS (443) — cert-manager usa HTTP-01 na porta 80
         ports:
           web:
             port: 8000
             expose:
               default: true
             exposedPort: 80
+          websecure:
+            port: 8443
+            expose:
+              default: true
+            exposedPort: 443
+            tls:
+              enabled: true
+
+        # Necessário para HTTP-01 do cert-manager (Ingress temporário de challenge)
+        providers:
+          kubernetesIngress:
+            enabled: true
+            ingressClass: traefik
 
         # Não subir dashboard em staging exposto publicamente
         ingressRoute:

@@ -32,6 +32,18 @@ spec:
             expose:
               default: true
             exposedPort: 80
+          websecure:
+            port: 8443
+            expose:
+              default: true
+            exposedPort: 443
+            tls:
+              enabled: true
+
+        providers:
+          kubernetesIngress:
+            enabled: true
+            ingressClass: traefik
 
         ingressRoute:
           dashboard:

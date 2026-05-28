@@ -8,6 +8,7 @@ spec:
   sourceRepos:
     # Charts Helm oficiais dos componentes
     - https://helm.traefik.io/traefik
+    - https://charts.jetstack.io
     - https://charts.external-secrets.io
     # Repo do desafio (manifests de config)
     - https://github.com/nikolastsdev/dito-devops-challenge

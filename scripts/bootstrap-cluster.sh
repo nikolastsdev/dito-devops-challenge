@@ -1,22 +1,13 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Bootstrap pós-cluster — roda UMA VEZ após terraform apply criar o GKE
+# Bootstrap pós-cluster — idempotente (pode rodar várias vezes com segurança)
 #
-# O que faz:
-#   1. Conecta ao cluster GKE
-#   2. Instala ArgoCD via Helm
-#   3. Aplica os AppProjects (infra, dito-challenge)
-#   4. Aplica as Applications (Traefik + app Groove)
-#      → ArgoCD assume e mantém tudo sincronizado a partir daí
-#
-# Pré-requisitos:
-#   - gcloud autenticado (gcloud auth login + application-default login)
-#   - kubectl e helm instalados
-#   - terraform apply já executado (cluster e IP estático existem)
-#
-# Uso:
-#   ./scripts/bootstrap-cluster.sh staging
-#   ./scripts/bootstrap-cluster.sh production
+# Fluxo:
+#   1. Credenciais GKE
+#   2. ArgoCD (Helm) — só instala se ainda não existir
+#   3. AppProjects + Applications GitOps
+#   4. Aguarda cert-manager + IP do Traefik
+#   5. IngressRoute ArgoCD (nip.io + Let's Encrypt)
 # =============================================================================
 
 set -euo pipefail
@@ -34,7 +25,112 @@ TFVARS="$REPO_ROOT/iac/environments/${ENV}.tfvars"
 PROJECT_ID="$(tfvars_value "$TFVARS" project_id)"
 REGION="southamerica-east1"
 CLUSTER_NAME="dito-gke-${ENV}"
-ARGOCD_VERSION="7.8.x"
+ARGOCD_VERSION="7.8.23"
+ARGOCD_INGRESS_DIR="$REPO_ROOT/manifests/infra/argocd-ingress"
+
+log() { echo "--> $*"; }
+skip() { echo "    [skip] $*"; }
+
+helm_release_exists() {
+  helm status "$1" -n "$2" &>/dev/null
+}
+
+deployment_ready() {
+  local ns="$1" name="$2"
+  kubectl get deployment "$name" -n "$ns" -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -qE '^[1-9]'
+}
+
+application_synced() {
+  local name="$1"
+  local status
+  status="$(kubectl get application "$name" -n argocd -o jsonpath='{.status.sync.status}' 2>/dev/null || true)"
+  [[ "$status" == "Synced" ]]
+}
+
+wait_for_traefik_ip() {
+  local timeout="${1:-300}" elapsed=0 ip=""
+  log "Aguardando IP externo do Traefik (timeout ${timeout}s)..."
+  while [[ $elapsed -lt $timeout ]]; do
+    ip="$(kubectl get svc traefik -n traefik -o jsonpath='{.status.loadBalancer.ingress[0].ip}' 2>/dev/null || true)"
+    if [[ -n "$ip" ]]; then
+      echo "$ip"
+      return 0
+    fi
+    sleep 10
+    elapsed=$((elapsed + 10))
+  done
+  echo "Timeout aguardando IP do Traefik" >&2
+  return 1
+}
+
+wait_for_cert_manager() {
+  local timeout="${1:-300}" elapsed=0
+  log "Aguardando cert-manager..."
+  while [[ $elapsed -lt $timeout ]]; do
+    if deployment_ready cert-manager cert-manager-webhook \
+      && deployment_ready cert-manager cert-manager \
+      && kubectl get clusterissuer letsencrypt-prod &>/dev/null; then
+      return 0
+    fi
+    sleep 10
+    elapsed=$((elapsed + 10))
+  done
+  echo "Timeout aguardando cert-manager / ClusterIssuer" >&2
+  return 1
+}
+
+install_argocd() {
+  helm repo add argo https://argoproj.github.io/argo-helm 2>/dev/null || true
+  helm repo update argo >/dev/null
+
+  if helm_release_exists argocd argocd && deployment_ready argocd argocd-server; then
+    skip "ArgoCD já instalado e pronto"
+    return 0
+  fi
+
+  log "Instalando ArgoCD (Helm)..."
+  helm upgrade --install argocd argo/argo-cd \
+    --namespace argocd \
+    --create-namespace \
+    --version "$ARGOCD_VERSION" \
+    --set server.service.type=ClusterIP \
+    --set configs.params."server\.insecure"=true \
+    --wait --timeout 5m
+}
+
+apply_application() {
+  local file="$1"
+  local name
+  name="$(grep '^  name:' "$file" | head -1 | awk '{print $2}')"
+  if application_synced "$name"; then
+    skip "Application $name já sincronizada — reaplicando manifest se houver diff"
+  fi
+  kubectl apply -f "$file"
+}
+
+apply_argocd_ingress() {
+  local traefik_ip="$1"
+  local host="argocd.${traefik_ip}.nip.io"
+
+  export ARGOCD_HOST="$host"
+  log "Configurando IngressRoute ArgoCD: https://${host}"
+
+  for tpl in middleware-redirect.yaml.tpl certificate.yaml.tpl ingressroute-http.yaml.tpl ingressroute-https.yaml.tpl; do
+    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/$tpl" | kubectl apply -f -
+  done
+
+  if helm_release_exists argocd argocd; then
+    log "Atualizando URL externa do ArgoCD..."
+    helm upgrade argocd argo/argo-cd -n argocd \
+      --reuse-values \
+      --set configs.cm.url="https://${host}" \
+      --wait --timeout 3m
+  fi
+
+  echo ""
+  echo "  ArgoCD UI: https://${host}"
+  echo "  User: admin"
+}
 
 echo "=============================================="
 echo " Bootstrap pós-cluster: $ENV"
@@ -42,64 +138,37 @@ echo " Project : $PROJECT_ID"
 echo " Cluster : $CLUSTER_NAME"
 echo "=============================================="
 
-# ── 1. Credenciais do cluster ─────────────────────────────────────────────────
-echo ""
-echo "--> Obtendo credenciais do GKE..."
+log "Obtendo credenciais do GKE..."
 gcloud container clusters get-credentials "$CLUSTER_NAME" \
   --region "$REGION" \
   --project "$PROJECT_ID"
 
-kubectl cluster-info
+install_argocd
 
-# ── 2. ArgoCD via Helm ────────────────────────────────────────────────────────
-echo ""
-echo "--> Instalando ArgoCD (Helm)..."
-helm repo add argo https://argoproj.github.io/argo-helm
-helm repo update
-
-helm upgrade --install argocd argo/argo-cd \
-  --namespace argocd \
-  --create-namespace \
-  --version "$ARGOCD_VERSION" \
-  --set server.service.type=ClusterIP \
-  --set configs.params."server\.insecure"=true \
-  --wait --timeout 5m
-
-echo "  ArgoCD instalado."
-
-# ── 3. AppProjects ────────────────────────────────────────────────────────────
-echo ""
-echo "--> Aplicando AppProjects..."
+log "Aplicando AppProjects..."
 kubectl apply -f "$REPO_ROOT/gitops/argocd/projects/infra.yaml"
 kubectl apply -f "$REPO_ROOT/gitops/argocd/projects/dito-challenge.yaml"
-echo "  AppProjects ok."
 
-# ── 4. Applications ───────────────────────────────────────────────────────────
-# Traefik PRIMEIRO (sync-wave: "-1" já garante a ordem dentro do ArgoCD,
-# mas aplicamos antes para dar tempo de o LB receber o IP estático)
-echo ""
-echo "--> Aplicando Application: traefik-${ENV}..."
-kubectl apply -f "$REPO_ROOT/gitops/argocd/applications/traefik-${ENV}.yaml"
+log "Aplicando Applications..."
+apply_application "$REPO_ROOT/gitops/argocd/applications/cert-manager-${ENV}.yaml"
+apply_application "$REPO_ROOT/gitops/argocd/applications/cluster-issuers-${ENV}.yaml"
+apply_application "$REPO_ROOT/gitops/argocd/applications/traefik-${ENV}.yaml"
+apply_application "$REPO_ROOT/gitops/argocd/applications/${ENV}.yaml"
 
-echo "--> Aplicando Application: dito-api-${ENV}..."
-kubectl apply -f "$REPO_ROOT/gitops/argocd/applications/${ENV}.yaml"
+wait_for_cert_manager 600
+
+TRAEFIK_IP="$(wait_for_traefik_ip 600)"
+apply_argocd_ingress "$TRAEFIK_IP"
 
 echo ""
 echo "=============================================="
 echo " Bootstrap concluído!"
 echo "=============================================="
 echo ""
-echo "Monitorar sync:"
-echo "  kubectl get applications -n argocd"
+kubectl get applications -n argocd 2>/dev/null || true
 echo ""
-echo "Aguardar IP do Load Balancer Traefik (~2 min):"
-echo "  kubectl get svc traefik -n traefik -w"
+kubectl get certificate -n argocd 2>/dev/null || true
 echo ""
-echo "Senha inicial do ArgoCD admin:"
-echo "  kubectl -n argocd get secret argocd-initial-admin-secret \\"
-echo "    -o jsonpath='{.data.password}' | base64 -d && echo"
-echo ""
-echo "Port-forward ArgoCD UI:"
-echo "  kubectl port-forward svc/argocd-server -n argocd 8080:443"
-echo "  Acesse: http://localhost:8080  (user: admin)"
-echo ""
+echo "Senha ArgoCD admin:"
+kubectl -n argocd get secret argocd-initial-admin-secret \
+  -o jsonpath='{.data.password}' 2>/dev/null | base64 -d && echo || true
