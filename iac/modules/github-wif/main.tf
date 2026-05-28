@@ -92,7 +92,6 @@ locals {
     "roles/storage.admin",
     "roles/resourcemanager.projectIamAdmin",
     "roles/monitoring.editor",
-    "roles/billing.viewer",
     "roles/servicenetworking.networksAdmin",
   ]
 }

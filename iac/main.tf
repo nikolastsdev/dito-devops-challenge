@@ -77,6 +77,9 @@ module "iam" {
   kubernetes_namespace       = "dito-app"
   kubernetes_service_account = "dito-api"
   labels                     = local.common_labels
+
+  # Workload Identity pool (PROJECT.svc.id.goog) só existe após o GKE ser criado
+  depends_on = [module.kubernetes]
 }
 
 module "github_wif" {
