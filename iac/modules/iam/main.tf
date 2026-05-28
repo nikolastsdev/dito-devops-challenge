@@ -25,6 +25,9 @@ module "workload_identity" {
   ]
 
   use_existing_gcp_sa = false
+  # KSA é criada pelos manifests GitOps — Terraform só gerencia a GSA + binding
+  use_existing_k8s_sa = true
+  annotate_k8s_sa     = false
 }
 
 output "gsa_email" {

@@ -130,6 +130,24 @@ variable "github_repo" {
   default     = "dito-devops-challenge"
 }
 
+variable "use_existing_ci_service_account" {
+  description = "Usa SA dito-ci já criada manualmente no GCP"
+  type        = bool
+  default     = false
+}
+
+variable "manage_wif_identity_pool" {
+  description = "Cria pool/provider WIF via Terraform"
+  type        = bool
+  default     = true
+}
+
+variable "existing_wif_provider" {
+  description = "Provider WIF existente (quando manage_wif_identity_pool=false)"
+  type        = string
+  default     = ""
+}
+
 variable "enable_public_ingress" {
   description = "Reservar IP estático regional para Traefik Load Balancer"
   type        = bool

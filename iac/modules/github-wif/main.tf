@@ -5,28 +5,67 @@ variable "github_owner" { type = string }
 variable "github_repo" { type = string }
 variable "labels" { type = map(string) }
 
-# Número do project (necessário para montar o principal set do WIF)
+variable "use_existing_ci_service_account" {
+  description = "Usa SA CI já criada manualmente (evita erro 409)"
+  type        = bool
+  default     = false
+}
+
+variable "manage_wif_identity_pool" {
+  description = "Cria pool/provider WIF via Terraform. Desligue se já configurou no Console."
+  type        = bool
+  default     = true
+}
+
+variable "existing_wif_provider" {
+  description = "Resource name do provider WIF existente (quando manage_wif_identity_pool=false)"
+  type        = string
+  default     = ""
+}
+
 data "google_project" "this" {
   project_id = var.project_id
 }
 
-# ── WIF Pool ──────────────────────────────────────────────────────────────────
+resource "google_service_account" "ci" {
+  count = var.use_existing_ci_service_account ? 0 : 1
+
+  project      = var.project_id
+  account_id   = "${var.project_name}-ci"
+  display_name = "GitHub Actions CI — ${var.environment}"
+  description  = "Terraform plan/apply e push de imagens pelo pipeline"
+}
+
+data "google_service_account" "ci" {
+  count = var.use_existing_ci_service_account ? 1 : 0
+
+  account_id = "${var.project_name}-ci"
+  project    = var.project_id
+}
+
+locals {
+  ci_email = var.use_existing_ci_service_account ? data.google_service_account.ci[0].email : google_service_account.ci[0].email
+  ci_name  = var.use_existing_ci_service_account ? data.google_service_account.ci[0].name : google_service_account.ci[0].name
+}
+
 resource "google_iam_workload_identity_pool" "github" {
+  count = var.manage_wif_identity_pool ? 1 : 0
+
   project                   = var.project_id
   workload_identity_pool_id = "${var.project_name}-github-pool"
   display_name              = "GitHub Actions"
   description               = "Pool para autenticação keyless do GitHub Actions"
 }
 
-# ── WIF Provider (OIDC GitHub) ────────────────────────────────────────────────
 resource "google_iam_workload_identity_pool_provider" "github" {
+  count = var.manage_wif_identity_pool ? 1 : 0
+
   project                            = var.project_id
-  workload_identity_pool_id          = google_iam_workload_identity_pool.github.workload_identity_pool_id
+  workload_identity_pool_id          = google_iam_workload_identity_pool.github[0].workload_identity_pool_id
   workload_identity_pool_provider_id = "github-provider"
   display_name                       = "GitHub OIDC"
   description                        = "Provider OIDC — token.actions.githubusercontent.com"
 
-  # Mapeia claims do JWT GitHub para atributos GCP
   attribute_mapping = {
     "google.subject"       = "assertion.sub"
     "attribute.actor"      = "assertion.actor"
@@ -34,7 +73,6 @@ resource "google_iam_workload_identity_pool_provider" "github" {
     "attribute.ref"        = "assertion.ref"
   }
 
-  # Restringe ao repositório exato — impede uso por outros repos
   attribute_condition = "attribute.repository == '${var.github_owner}/${var.github_repo}'"
 
   oidc {
@@ -42,17 +80,6 @@ resource "google_iam_workload_identity_pool_provider" "github" {
   }
 }
 
-# ── CI Service Account ────────────────────────────────────────────────────────
-resource "google_service_account" "ci" {
-  project      = var.project_id
-  account_id   = "${var.project_name}-ci"
-  display_name = "GitHub Actions CI — ${var.environment}"
-  description  = "Terraform plan/apply e push de imagens pelo pipeline"
-}
-
-# ── IAM roles para o CI SA ────────────────────────────────────────────────────
-# Roles mínimas necessárias para o Terraform gerenciar toda a infra do projeto.
-# Em produção real, preferir roles customizadas ainda mais granulares.
 locals {
   ci_roles = [
     "roles/compute.admin",
@@ -66,37 +93,37 @@ locals {
     "roles/resourcemanager.projectIamAdmin",
     "roles/monitoring.editor",
     "roles/billing.viewer",
+    "roles/servicenetworking.networksAdmin",
   ]
 }
 
 resource "google_project_iam_member" "ci" {
   for_each = toset(local.ci_roles)
-  project  = var.project_id
-  role     = each.value
-  member   = "serviceAccount:${google_service_account.ci.email}"
+
+  project = var.project_id
+  role    = each.value
+  member  = "serviceAccount:${local.ci_email}"
 }
 
-# ── Binding WIF → CI SA ───────────────────────────────────────────────────────
-# Permite que tokens emitidos pelo pool para o repo específico
-# se comportem como o CI SA (sem chave JSON).
 resource "google_service_account_iam_member" "wif_binding" {
-  service_account_id = google_service_account.ci.name
+  count = var.manage_wif_identity_pool ? 1 : 0
+
+  service_account_id = local.ci_name
   role               = "roles/iam.workloadIdentityUser"
-  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github.name}/attribute.repository/${var.github_owner}/${var.github_repo}"
+  member             = "principalSet://iam.googleapis.com/${google_iam_workload_identity_pool.github[0].name}/attribute.repository/${var.github_owner}/${var.github_repo}"
 }
 
-# ── Outputs (copiar para GitHub Secrets) ─────────────────────────────────────
 output "workload_identity_provider" {
   description = "→ GitHub Secret: GCP_WORKLOAD_IDENTITY_PROVIDER"
-  value       = google_iam_workload_identity_pool_provider.github.name
+  value       = var.manage_wif_identity_pool ? google_iam_workload_identity_pool_provider.github[0].name : var.existing_wif_provider
 }
 
 output "service_account_email" {
   description = "→ GitHub Secret: GCP_SERVICE_ACCOUNT"
-  value       = google_service_account.ci.email
+  value       = local.ci_email
 }
 
 output "pool_name" {
   description = "Nome do WIF pool"
-  value       = google_iam_workload_identity_pool.github.name
+  value       = var.manage_wif_identity_pool ? google_iam_workload_identity_pool.github[0].name : null
 }

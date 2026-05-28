@@ -19,6 +19,13 @@ locals {
   services_range_name = "${var.project_name}-services-${var.environment}"
 }
 
+resource "google_project_service" "servicenetworking" {
+  project = var.project_id
+  service = "servicenetworking.googleapis.com"
+
+  disable_on_destroy = false
+}
+
 module "vpc" {
   source  = "terraform-google-modules/network/google"
   version = "~> 10.0"
@@ -89,6 +96,13 @@ resource "google_service_networking_connection" "private_vpc_connection" {
   network                 = module.vpc.network_id
   service                 = "servicenetworking.googleapis.com"
   reserved_peering_ranges = [google_compute_global_address.private_service_range.name]
+
+  depends_on = [google_project_service.servicenetworking]
+
+  timeouts {
+    create = "20m"
+    update = "20m"
+  }
 }
 
 # Cloud NAT — módulo oficial cloud-router

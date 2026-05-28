@@ -82,12 +82,15 @@ module "iam" {
 module "github_wif" {
   source = "./modules/github-wif"
 
-  project_id   = var.project_id
-  environment  = var.environment
-  project_name = var.project_name
-  github_owner = var.github_owner
-  github_repo  = var.github_repo
-  labels       = local.common_labels
+  project_id                      = var.project_id
+  environment                     = var.environment
+  project_name                    = var.project_name
+  github_owner                    = var.github_owner
+  github_repo                     = var.github_repo
+  labels                          = local.common_labels
+  use_existing_ci_service_account = var.use_existing_ci_service_account
+  manage_wif_identity_pool        = var.manage_wif_identity_pool
+  existing_wif_provider           = var.existing_wif_provider
 }
 
 module "public_ingress" {

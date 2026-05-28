@@ -33,6 +33,11 @@ dns_managed_zone      = "" # ex.: seudominio-com-br (zona no Cloud DNS)
 github_owner = "nikolastsdev"
 github_repo  = "dito-devops-challenge"
 
+# WIF/SA criados manualmente no Console antes do primeiro apply
+use_existing_ci_service_account = true
+manage_wif_identity_pool        = false
+existing_wif_provider           = "projects/747897055808/locations/global/workloadIdentityPools/github-pool/providers/github"
+
 labels = {
   owner       = "nikolastsdev"
   challenge   = "dito-devops-iii"
