@@ -4,13 +4,11 @@ on:
   pull_request:
     paths:
       - 'iac/**'
-      - 'scripts/**'
       - '.github/workflows/terraform.yml'
   push:
     branches: [main]
     paths:
       - 'iac/**'
-      - 'scripts/**'
       - '.github/workflows/terraform.yml'
   workflow_dispatch:
     inputs:
@@ -19,19 +17,18 @@ on:
         required: true
         default: staging
         type: choice
-        options:
-          - staging
-          - production
+        options: [staging, production]
       action:
         description: 'Ação a executar'
         required: true
         default: plan
         type: choice
-        options:
-          - plan
-          - apply
-          - bootstrap-cluster
-          - destroy
+        options: [plan, apply, bootstrap, destroy]
+
+# Impede runs paralelos no mesmo ambiente — evita conflito de state
+concurrency:
+  group: terraform-${{ github.event.inputs.environment || 'staging' }}-${{ github.ref }}
+  cancel-in-progress: false
 
 permissions:
   contents: read
@@ -45,7 +42,7 @@ env:
   WORKING_DIR: iac
 
 jobs:
-  # ── 1. Validate (sempre) ────────────────────────────────────────────────────
+  # ── 1. Validate ─────────────────────────────────────────────────────────────
   validate:
     name: Validate
     runs-on: ubuntu-latest
@@ -61,16 +58,17 @@ jobs:
       - run: terraform init -backend=false
       - run: terraform validate
 
-  # ── 2. Plan Staging ─────────────────────────────────────────────────────────
+  # ── 2. Plan Staging ──────────────────────────────────────────────────────────
+  # Roda em: PR, push main, dispatch staging (plan|apply|bootstrap)
   plan-staging:
     name: Plan Staging
     needs: validate
-    if: |
+    if: >-
       github.event_name == 'pull_request' ||
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.environment == 'staging' &&
-        (github.event.inputs.action == 'plan' || github.event.inputs.action == 'apply'))
+       github.event.inputs.environment == 'staging' &&
+       github.event.inputs.action != 'destroy')
     runs-on: ubuntu-latest
     environment: staging
     defaults:
@@ -86,26 +84,27 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - run: terraform init -backend-config=backends/staging.gcs.tfbackend -reconfigure
-      - name: Plan staging
+      - name: Terraform Plan
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
         run: |
-          terraform plan -var-file=environments/staging.tfvars -input=false -no-color \
-            | tee ../plan-staging.txt
+          terraform plan -var-file=environments/staging.tfvars \
+            -input=false -no-color | tee ../plan-staging.txt
       - uses: actions/upload-artifact@v4
         with:
           name: plan-staging
           path: plan-staging.txt
 
-  # ── 3. Plan Production ──────────────────────────────────────────────────────
+  # ── 3. Plan Production ───────────────────────────────────────────────────────
+  # Roda em: PR, dispatch production (plan|apply)
   plan-production:
     name: Plan Production
     needs: validate
-    if: |
+    if: >-
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.environment == 'production' &&
-        (github.event.inputs.action == 'plan' || github.event.inputs.action == 'apply'))
+       github.event.inputs.environment == 'production' &&
+       github.event.inputs.action != 'destroy')
     runs-on: ubuntu-latest
     environment: production
     defaults:
@@ -121,26 +120,27 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
-      - name: Plan production
+      - name: Terraform Plan
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
         run: |
-          terraform plan -var-file=environments/production.tfvars -input=false -no-color \
-            | tee ../plan-production.txt
+          terraform plan -var-file=environments/production.tfvars \
+            -input=false -no-color | tee ../plan-production.txt
       - uses: actions/upload-artifact@v4
         with:
           name: plan-production
           path: plan-production.txt
 
-  # ── 4. Apply Staging ────────────────────────────────────────────────────────
+  # ── 4. Apply Staging ─────────────────────────────────────────────────────────
+  # Roda em: push main, dispatch staging apply
   apply-staging:
     name: Apply Staging
-    needs: [plan-staging]
-    if: |
-      (github.ref == 'refs/heads/main' && github.event_name == 'push') ||
+    needs: plan-staging
+    if: >-
+      (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' &&
-        github.event.inputs.environment == 'staging' &&
-        github.event.inputs.action == 'apply')
+       github.event.inputs.environment == 'staging' &&
+       github.event.inputs.action == 'apply')
     runs-on: ubuntu-latest
     environment: staging
     defaults:
@@ -156,15 +156,17 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - run: terraform init -backend-config=backends/staging.gcs.tfbackend -reconfigure
-      - run: terraform apply -var-file=environments/staging.tfvars -auto-approve -input=false
+      - name: Terraform Apply
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: terraform apply -var-file=environments/staging.tfvars -auto-approve -input=false
 
-  # ── 5. Apply Production ─────────────────────────────────────────────────────
+  # ── 5. Apply Production ──────────────────────────────────────────────────────
+  # Apenas dispatch manual — requer aprovação no GitHub Environment
   apply-production:
     name: Apply Production
-    needs: [plan-production]
-    if: |
+    needs: plan-production
+    if: >-
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.environment == 'production' &&
       github.event.inputs.action == 'apply'
@@ -183,217 +185,151 @@ jobs:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
-      - run: terraform apply -var-file=environments/production.tfvars -auto-approve -input=false
+      - name: Terraform Apply
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: terraform apply -var-file=environments/production.tfvars -auto-approve -input=false
 
-  # ── 6. Bootstrap Cluster Staging ────────────────────────────────────────────
+  # ── 6. Bootstrap Cluster Staging ─────────────────────────────────────────────
+  # Automático após apply-staging, ou manual via dispatch bootstrap
   bootstrap-cluster-staging:
     name: Bootstrap Cluster Staging
-    needs: [apply-staging]
-    if: |
-      always() &&
-      needs.apply-staging.result == 'success'
+    needs: apply-staging
+    if: >-
+      always() && needs.apply-staging.result == 'success'
     runs-on: ubuntu-latest
     environment: staging
     steps:
       - uses: actions/checkout@v4
-
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
       - uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ vars.GCP_PROJECT_ID_STAGING }}
           install_components: gke-gcloud-auth-plugin
-
       - name: Get cluster credentials
         run: |
           gcloud container clusters get-credentials dito-gke-staging \
-            --region southamerica-east1 \
-            --project ${{ vars.GCP_PROJECT_ID_STAGING }}
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
+            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_STAGING }}
+      - uses: azure/setup-helm@v4
         with:
           version: v3.17.3
-
       - name: Install ArgoCD
         run: |
           helm repo add argo https://argoproj.github.io/argo-helm
           helm repo update
           helm upgrade --install argocd argo/argo-cd \
-            --namespace argocd \
-            --create-namespace \
+            --namespace argocd --create-namespace \
             --version ${{ env.ARGOCD_VERSION }} \
             --set server.service.type=ClusterIP \
             --set configs.params."server\.insecure"=true \
             --wait --timeout 5m
-
-      - name: Apply AppProjects
+      - name: Apply AppProjects and Applications
         run: |
           kubectl apply -f gitops/argocd/projects/infra.yaml
           kubectl apply -f gitops/argocd/projects/dito-challenge.yaml
-
-      - name: Apply Applications
-        run: |
           kubectl apply -f gitops/argocd/applications/traefik-staging.yaml
           kubectl apply -f gitops/argocd/applications/staging.yaml
-
       - name: Show status
         run: |
-          echo "=== ArgoCD Applications ==="
-          kubectl get applications -n argocd 2>/dev/null || echo "aguardando ArgoCD..."
-          echo "=== Traefik LB ==="
-          kubectl get svc -n traefik 2>/dev/null || echo "aguardando Traefik..."
-          echo "Senha ArgoCD admin:"
+          kubectl get applications -n argocd 2>/dev/null || true
+          kubectl get svc -n traefik 2>/dev/null || true
           kubectl -n argocd get secret argocd-initial-admin-secret \
             -o jsonpath='{.data.password}' 2>/dev/null | base64 -d && echo || true
 
-  # ── 7. Bootstrap Cluster Production ─────────────────────────────────────────
+  # ── 7. Bootstrap Cluster Production ──────────────────────────────────────────
   bootstrap-cluster-production:
     name: Bootstrap Cluster Production
-    needs: [apply-production]
-    if: |
-      always() &&
-      needs.apply-production.result == 'success'
+    needs: apply-production
+    if: >-
+      always() && needs.apply-production.result == 'success'
     runs-on: ubuntu-latest
     environment: production
     steps:
       - uses: actions/checkout@v4
-
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
       - uses: google-github-actions/setup-gcloud@v2
         with:
           project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
           install_components: gke-gcloud-auth-plugin
-
       - name: Get cluster credentials
         run: |
           gcloud container clusters get-credentials dito-gke-production \
-            --region southamerica-east1 \
-            --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
-
-      - name: Install Helm
-        uses: azure/setup-helm@v4
+            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
+      - uses: azure/setup-helm@v4
         with:
           version: v3.17.3
-
       - name: Install ArgoCD
         run: |
           helm repo add argo https://argoproj.github.io/argo-helm
           helm repo update
           helm upgrade --install argocd argo/argo-cd \
-            --namespace argocd \
-            --create-namespace \
+            --namespace argocd --create-namespace \
             --version ${{ env.ARGOCD_VERSION }} \
             --set server.service.type=ClusterIP \
             --set configs.params."server\.insecure"=true \
             --wait --timeout 5m
-
       - name: Apply AppProjects and Applications
         run: |
           kubectl apply -f gitops/argocd/projects/infra.yaml
           kubectl apply -f gitops/argocd/projects/dito-challenge.yaml
           kubectl apply -f gitops/argocd/applications/traefik-production.yaml
           kubectl apply -f gitops/argocd/applications/production.yaml
-
       - name: Show status
         run: |
           kubectl get applications -n argocd 2>/dev/null || true
           kubectl get svc -n traefik 2>/dev/null || true
 
-  # ── 8. Destroy — apenas via workflow_dispatch ────────────────────────────────
-  destroy-staging:
-    name: "Destroy Staging"
+  # ── 8. Destroy ────────────────────────────────────────────────────────────────
+  # Apenas dispatch manual — requer aprovação no GitHub Environment
+  destroy:
+    name: Destroy ${{ github.event.inputs.environment }}
     needs: validate
-    if: |
+    if: >-
       github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.environment == 'staging' &&
       github.event.inputs.action == 'destroy'
     runs-on: ubuntu-latest
-    environment: staging
+    environment: ${{ github.event.inputs.environment }}
     defaults:
       run:
         working-directory: ${{ env.WORKING_DIR }}
     steps:
       - uses: actions/checkout@v4
-
       - uses: hashicorp/setup-terraform@v3
         with:
           terraform_version: ${{ env.TF_VERSION }}
-
       - uses: google-github-actions/auth@v2
         with:
           workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
       - uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ vars.GCP_PROJECT_ID_STAGING }}
+          project_id: ${{ vars[format('GCP_PROJECT_ID_{0}', upper(github.event.inputs.environment))] }}
           install_components: gke-gcloud-auth-plugin
-
-      - name: Drain ArgoCD Applications
+      - name: Drain workloads
+        env:
+          ENV: ${{ github.event.inputs.environment }}
         run: |
-          gcloud container clusters get-credentials dito-gke-staging \
-            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_STAGING }} 2>/dev/null || true
+          CLUSTER="dito-gke-${ENV}"
+          PROJECT="${{ vars[format('GCP_PROJECT_ID_{0}', upper(github.event.inputs.environment))] }}"
+          gcloud container clusters get-credentials "${CLUSTER}" \
+            --region southamerica-east1 --project "${PROJECT}" 2>/dev/null || true
           kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
           kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
-
-      - run: terraform init -backend-config=backends/staging.gcs.tfbackend -reconfigure
-
-      - name: Terraform Destroy Staging
+      - name: Terraform Init
+        run: |
+          terraform init \
+            -backend-config=backends/${{ github.event.inputs.environment }}.gcs.tfbackend \
+            -reconfigure
+      - name: Terraform Destroy
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
         run: |
-          terraform destroy -var-file=environments/staging.tfvars -auto-approve -input=false
-
-  destroy-production:
-    name: "Destroy Production"
-    needs: validate
-    if: |
-      github.event_name == 'workflow_dispatch' &&
-      github.event.inputs.environment == 'production' &&
-      github.event.inputs.action == 'destroy'
-    runs-on: ubuntu-latest
-    environment: production
-    defaults:
-      run:
-        working-directory: ${{ env.WORKING_DIR }}
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: hashicorp/setup-terraform@v3
-        with:
-          terraform_version: ${{ env.TF_VERSION }}
-
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
-          install_components: gke-gcloud-auth-plugin
-
-      - name: Drain ArgoCD Applications
-        run: |
-          gcloud container clusters get-credentials dito-gke-production \
-            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }} 2>/dev/null || true
-          kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
-          kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
-
-      - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
-
-      - name: Terraform Destroy Production
-        env:
-          TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
-        run: |
-          terraform destroy -var-file=environments/production.tfvars -auto-approve -input=false
+          terraform destroy \
+            -var-file=environments/${{ github.event.inputs.environment }}.tfvars \
+            -auto-approve -input=false
