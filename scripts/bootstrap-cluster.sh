@@ -20,7 +20,7 @@ REGION="southamerica-east1"
 CLUSTER_NAME="dito-gke-${ENV}"
 ARGOCD_VERSION="7.8.23"
 CERT_MANAGER_VERSION="v1.14.5"
-CERT_MANAGER_MANIFEST="https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
+CERT_MANAGER_CHART_VERSION="v1.14.5"
 ARGOCD_INGRESS_DIR="$REPO_ROOT/manifests/infra/argocd-ingress"
 
 log() { echo "--> $*" >&2; }
@@ -78,21 +78,26 @@ wait_for_argocd_controller() {
 }
 
 install_cert_manager() {
-  if cert_manager_ready; then
-    skip "cert-manager já pronto"
+  if helm_release_exists cert-manager cert-manager && cert_manager_ready; then
+    skip "cert-manager já instalado e pronto (Helm)"
     return 0
   fi
 
   log "Criando namespace cert-manager..."
   kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f -
 
-  if ! crds_installed; then
-    log "Aplicando cert-manager ${CERT_MANAGER_VERSION} (kubectl, sem --wait)..."
-    # Manifest oficial — não usa Helm --wait (trava em cluster privado)
-    curl -fsSL "$CERT_MANAGER_MANIFEST" | kubectl apply -f -
-  else
-    skip "CRDs cert-manager já existem"
-  fi
+  helm repo add jetstack https://charts.jetstack.io 2>/dev/null || true
+  helm repo update jetstack >/dev/null
+
+  log "Instalando cert-manager ${CERT_MANAGER_CHART_VERSION} via Helm (sem --wait)..."
+  # Não usa --wait para não travar a pipeline; ArgoCD gerencia o estado depois
+  helm upgrade --install cert-manager jetstack/cert-manager \
+    --namespace cert-manager \
+    --version "${CERT_MANAGER_CHART_VERSION}" \
+    --set crds.enabled=true \
+    --set crds.keep=true \
+    --set startupapicheck.enabled=false \
+    --timeout 3m || warn "Helm cert-manager retornou aviso — verificar estado depois"
 
   log "Aguardando deployments cert-manager (máx 120s, não bloqueia bootstrap)..."
   for dep in cert-manager cert-manager-webhook cert-manager-cainjector; do
@@ -136,7 +141,25 @@ install_argocd() {
 }
 
 apply_application() {
-  kubectl apply -f "$1"
+  local file="$1"
+  if [[ ! -f "$file" ]]; then
+    warn "Application não encontrada: $file"
+    return 0
+  fi
+  log "Aplicando Application: $(basename "$file")"
+  kubectl apply -f "$file"
+}
+
+apply_infra_applications() {
+  local apps=(
+    "cert-manager-${ENV}"
+    "cluster-issuers-${ENV}"
+    "traefik-${ENV}"
+  )
+
+  for app in "${apps[@]}"; do
+    apply_application "$REPO_ROOT/gitops/argocd/applications/${app}.yaml"
+  done
 }
 
 render_template() {
@@ -232,8 +255,10 @@ log "Aplicando AppProjects..."
 kubectl apply -f "$REPO_ROOT/gitops/argocd/projects/infra.yaml"
 kubectl apply -f "$REPO_ROOT/gitops/argocd/projects/dito-challenge.yaml"
 
-log "Aplicando Applications (Traefik + app)..."
-apply_application "$REPO_ROOT/gitops/argocd/applications/traefik-${ENV}.yaml"
+log "Aplicando Applications de infra (cert-manager, cluster-issuers, traefik)..."
+apply_infra_applications
+
+log "Aplicando Application da app..."
 apply_application "$REPO_ROOT/gitops/argocd/applications/${ENV}.yaml"
 
 # Aguarda cert-manager em background (não falha se demorar)

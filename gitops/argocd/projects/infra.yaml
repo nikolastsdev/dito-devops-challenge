@@ -21,6 +21,8 @@ spec:
       server: https://kubernetes.default.svc
     - namespace: argocd
       server: https://kubernetes.default.svc
+    - namespace: kube-system
+      server: https://kubernetes.default.svc
   # Componentes de infra precisam criar ClusterRoles, CRDs etc.
   clusterResourceWhitelist:
     - group: "*"

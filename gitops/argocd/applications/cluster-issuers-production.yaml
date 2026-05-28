@@ -1,0 +1,31 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: cluster-issuers-production
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: cluster-issuers
+    environment: production
+  annotations:
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: infra
+
+  source:
+    repoURL: https://github.com/nikolastsdev/dito-devops-challenge.git
+    targetRevision: main
+    path: manifests/infra/cluster-issuers
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: cert-manager
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  revisionHistoryLimit: 3
