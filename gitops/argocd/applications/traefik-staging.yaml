@@ -7,15 +7,16 @@ metadata:
     app.kubernetes.io/name: traefik
     environment: staging
   annotations:
-    # sync-wave: "-1" garante que o Traefik sobe ANTES da app Groove
     argocd.argoproj.io/sync-wave: "-1"
+    # Server-side diff evita erro de schema nos CRDs do Traefik 33.x
+    argocd.argoproj.io/compare-options: "ServerSideDiff=true"
 spec:
   project: infra
 
   source:
     repoURL: https://helm.traefik.io/traefik
     chart: traefik
-    targetRevision: "33.x"
+    targetRevision: "32.x"
     helm:
       releaseName: traefik
       values: |
@@ -83,12 +84,6 @@ spec:
   destination:
     server: https://kubernetes.default.svc
     namespace: traefik
-
-  ignoreDifferences:
-    - group: apiextensions.k8s.io
-      kind: CustomResourceDefinition
-      jsonPointers:
-        - /status/terminatingReplicas
 
   syncPolicy:
     automated:
