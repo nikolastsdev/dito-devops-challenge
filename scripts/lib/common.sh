@@ -50,7 +50,9 @@ require_db_password() {
 tfvars_value() {
   local file="$1"
   local key="$2"
-  grep "^[[:space:]]*${key}[[:space:]]*=" "$file" | head -1 | awk -F'"' '{print $2}'
+  { grep "^[[:space:]]*${key}[[:space:]]*=" "$file" 2>/dev/null || true; } \
+    | head -1 \
+    | awk -F'"' '{print $2}'
 }
 
 iac_paths() {

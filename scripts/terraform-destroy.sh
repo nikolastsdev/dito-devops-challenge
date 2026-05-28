@@ -105,7 +105,7 @@ destroy_all() {
 
 cd "$IAC_DIR"
 
-log "Destroy Terraform: $ENV (project=$PROJECT_ID)"
+log "Destroy Terraform: $ENV (project=$PROJECT_ID, cluster=$CLUSTER)"
 disable_gke_deletion_protection
 
 destroy_target "IAM" "module.iam" || true
@@ -115,5 +115,9 @@ wait_for_gke_gone
 destroy_target "Database" "module.database" || true
 wait_for_sql_gone
 
-destroy_all 2 60
-log "Destroy concluído"
+if destroy_all 2 60; then
+  log "Destroy concluído"
+else
+  echo "Erro: destroy completo falhou após retries" >&2
+  exit 1
+fi
