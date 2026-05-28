@@ -14,7 +14,7 @@ services_cidr       = "10.22.0.0/20"
 # Diferenças vs staging (fluxo GitOps production)
 node_count            = 2
 machine_type          = "e2-small"
-use_preemptible_nodes = true # preemptible no trial — economia
+use_preemptible_nodes = true  # preemptible no trial — economia
 use_public_nodes      = false # nodes privados + Cloud NAT
 
 cloud_sql_tier = "db-f1-micro"
