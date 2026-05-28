@@ -23,9 +23,9 @@ CERT_MANAGER_VERSION="v1.14.5"
 CERT_MANAGER_MANIFEST="https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
 ARGOCD_INGRESS_DIR="$REPO_ROOT/manifests/infra/argocd-ingress"
 
-log() { echo "--> $*"; }
-skip() { echo "    [skip] $*"; }
-warn() { echo "    [warn] $*"; }
+log() { echo "--> $*" >&2; }
+skip() { echo "    [skip] $*" >&2; }
+warn() { echo "    [warn] $*" >&2; }
 
 helm_release_exists() {
   helm status "$1" -n "$2" &>/dev/null
@@ -144,10 +144,21 @@ render_template() {
   sed "s/__ARGOCD_HOST__/${host}/g" "$tpl"
 }
 
+normalize_ip() {
+  # Remove whitespace/newlines — evita host inválido ao capturar stdout de funções
+  echo "$1" | tr -d '[:space:]'
+}
+
 apply_argocd_ingress() {
-  local traefik_ip="$1"
-  local host="argocd.${traefik_ip}.nip.io"
-  local tls_ready=false
+  local traefik_ip host tls_ready=false
+
+  traefik_ip="$(normalize_ip "$1")"
+  if [[ ! "$traefik_ip" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+    warn "IP Traefik inválido: '${traefik_ip}' — pulando IngressRoute"
+    return 1
+  fi
+
+  host="argocd.${traefik_ip}.nip.io"
 
   cert_manager_ready && tls_ready=true
 
@@ -229,9 +240,9 @@ apply_application "$REPO_ROOT/gitops/argocd/applications/${ENV}.yaml"
 wait %1 2>/dev/null || warn "install_cert_manager em background terminou com aviso"
 
 TRAEFIK_IP=""
-TRAEFIK_IP="$(wait_for_traefik_ip 600)" || true
-if [[ -z "$TRAEFIK_IP" ]]; then
-  warn "Traefik sem IP ainda — pulando IngressRoute ArgoCD"
+TRAEFIK_IP="$(normalize_ip "$(wait_for_traefik_ip 600 || true)")"
+if [[ -z "$TRAEFIK_IP" ]] || [[ ! "$TRAEFIK_IP" =~ ^[0-9]+\.[0-9]+\.[0-9]+\.[0-9]+$ ]]; then
+  warn "Traefik sem IP válido ainda — pulando IngressRoute ArgoCD"
 else
   apply_argocd_ingress "$TRAEFIK_IP"
 fi
