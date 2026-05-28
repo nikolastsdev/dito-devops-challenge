@@ -16,6 +16,16 @@ variable "use_preemptible_nodes" { type = bool }
 variable "use_public_nodes" { type = bool }
 variable "labels" { type = map(string) }
 
+variable "deletion_protection" {
+  description = "Override da proteção contra destroy do GKE (null = true só em production)"
+  type        = bool
+  default     = null
+}
+
+locals {
+  deletion_protection = coalesce(var.deletion_protection, var.environment == "production")
+}
+
 module "gke" {
   source  = "terraform-google-modules/kubernetes-engine/google//modules/private-cluster"
   version = "~> 33.1"
@@ -41,8 +51,8 @@ module "gke" {
 
   release_channel = "REGULAR"
 
-  # Staging pode ser destruído via pipeline; production fica protegido
-  deletion_protection = var.environment == "production"
+  # Staging pode ser destruído via pipeline; production fica protegido por padrão
+  deletion_protection = local.deletion_protection
 
   remove_default_node_pool = true
 

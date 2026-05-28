@@ -63,6 +63,7 @@ module "kubernetes" {
   machine_type          = var.machine_type
   use_preemptible_nodes = var.use_preemptible_nodes
   use_public_nodes      = var.use_public_nodes
+  deletion_protection   = var.gke_deletion_protection
   labels                = local.common_labels
 
   depends_on = [module.network]

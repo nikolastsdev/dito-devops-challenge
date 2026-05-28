@@ -165,3 +165,9 @@ variable "dns_managed_zone" {
   type        = string
   default     = ""
 }
+
+variable "gke_deletion_protection" {
+  description = "Override da proteção contra destroy do GKE (null = true só em production)"
+  type        = bool
+  default     = null
+}
