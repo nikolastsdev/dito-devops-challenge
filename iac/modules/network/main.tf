@@ -135,7 +135,7 @@ output "private_subnet_name" {
 }
 
 output "private_subnet_id" {
-  value = module.vpc.subnets[local.subnet_name].id
+  value = module.vpc.subnets["${var.region}/${local.subnet_name}"].id
 }
 
 output "pods_range_name" {
