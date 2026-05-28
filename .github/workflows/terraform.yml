@@ -290,10 +290,6 @@ jobs:
           kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
           kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
       - run: terraform init -backend-config=backends/staging.gcs.tfbackend -reconfigure
-      - name: Prepare for destroy
-        run: |
-          chmod +x ../scripts/pre-destroy.sh
-          ../scripts/pre-destroy.sh staging
       - name: Terraform Destroy
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
@@ -344,10 +340,6 @@ jobs:
           kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
           kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
       - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
-      - name: Prepare for destroy
-        run: |
-          chmod +x ../scripts/pre-destroy.sh
-          ../scripts/pre-destroy.sh production
       - name: Terraform Destroy
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
