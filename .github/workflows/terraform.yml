@@ -25,7 +25,7 @@ on:
         type: choice
         options: [plan, apply, bootstrap, destroy]
 
-# Impede runs paralelos no mesmo ambiente — evita conflito de state
+# Impede runs paralelos no mesmo ambiente — evita conflito de state lock
 concurrency:
   group: terraform-${{ github.event.inputs.environment || 'staging' }}-${{ github.ref }}
   cancel-in-progress: false
@@ -63,7 +63,7 @@ jobs:
   plan-staging:
     name: Plan Staging
     needs: validate
-    if: >-
+    if: |
       github.event_name == 'pull_request' ||
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' &&
@@ -96,11 +96,11 @@ jobs:
           path: plan-staging.txt
 
   # ── 3. Plan Production ───────────────────────────────────────────────────────
-  # Roda em: PR, dispatch production (plan|apply)
+  # Roda em: PR, dispatch production (plan|apply|bootstrap)
   plan-production:
     name: Plan Production
     needs: validate
-    if: >-
+    if: |
       github.event_name == 'pull_request' ||
       (github.event_name == 'workflow_dispatch' &&
        github.event.inputs.environment == 'production' &&
@@ -136,7 +136,7 @@ jobs:
   apply-staging:
     name: Apply Staging
     needs: plan-staging
-    if: >-
+    if: |
       (github.event_name == 'push' && github.ref == 'refs/heads/main') ||
       (github.event_name == 'workflow_dispatch' &&
        github.event.inputs.environment == 'staging' &&
@@ -166,7 +166,7 @@ jobs:
   apply-production:
     name: Apply Production
     needs: plan-production
-    if: >-
+    if: |
       github.event_name == 'workflow_dispatch' &&
       github.event.inputs.environment == 'production' &&
       github.event.inputs.action == 'apply'
@@ -191,12 +191,11 @@ jobs:
         run: terraform apply -var-file=environments/production.tfvars -auto-approve -input=false
 
   # ── 6. Bootstrap Cluster Staging ─────────────────────────────────────────────
-  # Automático após apply-staging, ou manual via dispatch bootstrap
+  # Automático após apply-staging bem-sucedido
   bootstrap-cluster-staging:
     name: Bootstrap Cluster Staging
     needs: apply-staging
-    if: >-
-      always() && needs.apply-staging.result == 'success'
+    if: always() && needs.apply-staging.result == 'success'
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -243,8 +242,7 @@ jobs:
   bootstrap-cluster-production:
     name: Bootstrap Cluster Production
     needs: apply-production
-    if: >-
-      always() && needs.apply-production.result == 'success'
+    if: always() && needs.apply-production.result == 'success'
     runs-on: ubuntu-latest
     environment: production
     steps:
@@ -285,16 +283,17 @@ jobs:
           kubectl get applications -n argocd 2>/dev/null || true
           kubectl get svc -n traefik 2>/dev/null || true
 
-  # ── 8. Destroy ────────────────────────────────────────────────────────────────
+  # ── 8. Destroy Staging ────────────────────────────────────────────────────────
   # Apenas dispatch manual — requer aprovação no GitHub Environment
-  destroy:
-    name: Destroy ${{ github.event.inputs.environment }}
+  destroy-staging:
+    name: Destroy Staging
     needs: validate
-    if: >-
+    if: |
       github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.environment == 'staging' &&
       github.event.inputs.action == 'destroy'
     runs-on: ubuntu-latest
-    environment: ${{ github.event.inputs.environment }}
+    environment: staging
     defaults:
       run:
         working-directory: ${{ env.WORKING_DIR }}
@@ -309,27 +308,54 @@ jobs:
           service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
       - uses: google-github-actions/setup-gcloud@v2
         with:
-          project_id: ${{ vars[format('GCP_PROJECT_ID_{0}', upper(github.event.inputs.environment))] }}
+          project_id: ${{ vars.GCP_PROJECT_ID_STAGING }}
           install_components: gke-gcloud-auth-plugin
       - name: Drain workloads
-        env:
-          ENV: ${{ github.event.inputs.environment }}
         run: |
-          CLUSTER="dito-gke-${ENV}"
-          PROJECT="${{ vars[format('GCP_PROJECT_ID_{0}', upper(github.event.inputs.environment))] }}"
-          gcloud container clusters get-credentials "${CLUSTER}" \
-            --region southamerica-east1 --project "${PROJECT}" 2>/dev/null || true
+          gcloud container clusters get-credentials dito-gke-staging \
+            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_STAGING }} 2>/dev/null || true
           kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
           kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
-      - name: Terraform Init
-        run: |
-          terraform init \
-            -backend-config=backends/${{ github.event.inputs.environment }}.gcs.tfbackend \
-            -reconfigure
+      - run: terraform init -backend-config=backends/staging.gcs.tfbackend -reconfigure
       - name: Terraform Destroy
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: terraform destroy -var-file=environments/staging.tfvars -auto-approve -input=false
+
+  # ── 9. Destroy Production ─────────────────────────────────────────────────────
+  destroy-production:
+    name: Destroy Production
+    needs: validate
+    if: |
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.environment == 'production' &&
+      github.event.inputs.action == 'destroy'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
+          install_components: gke-gcloud-auth-plugin
+      - name: Drain workloads
         run: |
-          terraform destroy \
-            -var-file=environments/${{ github.event.inputs.environment }}.tfvars \
-            -auto-approve -input=false
+          gcloud container clusters get-credentials dito-gke-production \
+            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }} 2>/dev/null || true
+          kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
+          kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
+      - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
+      - name: Terraform Destroy
+        env:
+          TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: terraform destroy -var-file=environments/production.tfvars -auto-approve -input=false
