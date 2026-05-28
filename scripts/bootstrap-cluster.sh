@@ -1,13 +1,6 @@
 #!/usr/bin/env bash
 # =============================================================================
-# Bootstrap pós-cluster — idempotente (pode rodar várias vezes com segurança)
-#
-# Fluxo:
-#   1. Credenciais GKE
-#   2. ArgoCD (Helm) — só instala se ainda não existir
-#   3. cert-manager + ClusterIssuer (Helm/kubectl — confiável no bootstrap)
-#   4. AppProjects + Applications GitOps (Traefik + app)
-#   5. IngressRoute ArgoCD (nip.io + Let's Encrypt)
+# Bootstrap pós-cluster — idempotente, não trava em cert-manager
 # =============================================================================
 
 set -euo pipefail
@@ -27,11 +20,12 @@ REGION="southamerica-east1"
 CLUSTER_NAME="dito-gke-${ENV}"
 ARGOCD_VERSION="7.8.23"
 CERT_MANAGER_VERSION="v1.14.5"
+CERT_MANAGER_MANIFEST="https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.yaml"
 ARGOCD_INGRESS_DIR="$REPO_ROOT/manifests/infra/argocd-ingress"
 
 log() { echo "--> $*"; }
 skip() { echo "    [skip] $*"; }
-warn() { echo "    [warn] $*" >&2; }
+warn() { echo "    [warn] $*"; }
 
 helm_release_exists() {
   helm status "$1" -n "$2" &>/dev/null
@@ -42,10 +36,14 @@ deployment_ready() {
   kubectl get deployment "$name" -n "$ns" -o jsonpath='{.status.readyReplicas}' 2>/dev/null | grep -qE '^[1-9]'
 }
 
+crds_installed() {
+  kubectl get crd certificates.cert-manager.io &>/dev/null
+}
+
 cert_manager_ready() {
-  deployment_ready cert-manager cert-manager-webhook \
-    && deployment_ready cert-manager cert-manager \
-    && kubectl get clusterissuer letsencrypt-prod &>/dev/null
+  crds_installed \
+    && deployment_ready cert-manager cert-manager-webhook \
+    && deployment_ready cert-manager cert-manager
 }
 
 wait_for_traefik_ip() {
@@ -60,33 +58,13 @@ wait_for_traefik_ip() {
     sleep 10
     elapsed=$((elapsed + 10))
   done
-  echo "Timeout aguardando IP do Traefik" >&2
-  return 1
-}
-
-wait_for_cert_manager() {
-  local timeout="${1:-300}" elapsed=0
-  log "Aguardando cert-manager + ClusterIssuer (timeout ${timeout}s)..."
-  while [[ $elapsed -lt $timeout ]]; do
-    if cert_manager_ready; then
-      return 0
-    fi
-    if (( elapsed > 0 && elapsed % 30 == 0 )); then
-      kubectl get pods -n cert-manager 2>/dev/null || true
-      kubectl get clusterissuer 2>/dev/null || true
-    fi
-    sleep 10
-    elapsed=$((elapsed + 10))
-  done
-  echo "Timeout aguardando cert-manager / ClusterIssuer" >&2
-  kubectl get pods -n cert-manager 2>/dev/null || true
-  kubectl get clusterissuer 2>/dev/null || true
+  warn "Timeout aguardando IP do Traefik"
   return 1
 }
 
 wait_for_argocd_controller() {
-  local timeout="${1:-300}" elapsed=0
-  log "Aguardando ArgoCD controller..."
+  local timeout="${1:-180}" elapsed=0
+  log "Aguardando ArgoCD controller (timeout ${timeout}s)..."
   while [[ $elapsed -lt $timeout ]]; do
     if deployment_ready argocd argocd-application-controller \
       && deployment_ready argocd argocd-repo-server; then
@@ -95,8 +73,47 @@ wait_for_argocd_controller() {
     sleep 5
     elapsed=$((elapsed + 5))
   done
-  echo "Timeout aguardando ArgoCD controller" >&2
-  return 1
+  warn "ArgoCD controller ainda não pronto — continuando"
+  return 0
+}
+
+install_cert_manager() {
+  if cert_manager_ready; then
+    skip "cert-manager já pronto"
+    return 0
+  fi
+
+  log "Criando namespace cert-manager..."
+  kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f -
+
+  if ! crds_installed; then
+    log "Aplicando cert-manager ${CERT_MANAGER_VERSION} (kubectl, sem --wait)..."
+    # Manifest oficial — não usa Helm --wait (trava em cluster privado)
+    curl -fsSL "$CERT_MANAGER_MANIFEST" | kubectl apply -f -
+  else
+    skip "CRDs cert-manager já existem"
+  fi
+
+  log "Aguardando deployments cert-manager (máx 120s, não bloqueia bootstrap)..."
+  for dep in cert-manager cert-manager-webhook cert-manager-cainjector; do
+    kubectl wait --for=condition=Available "deployment/${dep}" \
+      -n cert-manager --timeout=120s 2>/dev/null \
+      && skip "  ${dep} ok" \
+      || warn "  ${dep} ainda não pronto — seguindo bootstrap"
+  done
+}
+
+ensure_cluster_issuer() {
+  if ! crds_installed; then
+    warn "CRDs cert-manager ausentes — ClusterIssuer será aplicado na próxima execução"
+    return 0
+  fi
+  if kubectl get clusterissuer letsencrypt-prod &>/dev/null; then
+    skip "ClusterIssuer letsencrypt-prod já existe"
+    return 0
+  fi
+  log "Aplicando ClusterIssuer letsencrypt-prod..."
+  kubectl apply -k "$REPO_ROOT/manifests/infra/cluster-issuers" || warn "ClusterIssuer falhou — tentar de novo depois"
 }
 
 install_argocd() {
@@ -118,61 +135,64 @@ install_argocd() {
     --wait --timeout 5m
 }
 
-ensure_cert_manager() {
-  if cert_manager_ready; then
-    skip "cert-manager + ClusterIssuer já prontos"
-    return 0
-  fi
-
-  if ! helm_release_exists cert-manager cert-manager; then
-    log "Instalando cert-manager (Helm)..."
-    helm repo add jetstack https://charts.jetstack.io 2>/dev/null || true
-    helm repo update jetstack >/dev/null
-    helm upgrade --install cert-manager jetstack/cert-manager \
-      --namespace cert-manager \
-      --create-namespace \
-      --version "$CERT_MANAGER_VERSION" \
-      --set crds.enabled=true \
-      --set prometheus.enabled=false \
-      --wait --timeout 5m
-  else
-    skip "Release cert-manager já existe"
-  fi
-
-  if ! kubectl get clusterissuer letsencrypt-prod &>/dev/null; then
-    log "Aplicando ClusterIssuer letsencrypt-prod..."
-    kubectl apply -k "$REPO_ROOT/manifests/infra/cluster-issuers"
-  fi
-
-  wait_for_cert_manager 300
-}
-
 apply_application() {
-  local file="$1"
-  kubectl apply -f "$file"
+  kubectl apply -f "$1"
 }
 
 apply_argocd_ingress() {
   local traefik_ip="$1"
   local host="argocd.${traefik_ip}.nip.io"
+  local tls_ready=false
 
   export ARGOCD_HOST="$host"
+  cert_manager_ready && tls_ready=true
+
   log "Configurando IngressRoute ArgoCD: https://${host}"
 
-  for tpl in middleware-redirect.yaml.tpl certificate.yaml.tpl ingressroute-http.yaml.tpl ingressroute-https.yaml.tpl; do
-    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/$tpl" | kubectl apply -f -
-  done
+  if $tls_ready; then
+    log "cert-manager pronto — aplicando Certificate + HTTPS"
+    ensure_cluster_issuer
+    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/middleware-redirect.yaml.tpl" | kubectl apply -f -
+    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/ingressroute-http.yaml.tpl" | kubectl apply -f -
+    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/certificate.yaml.tpl" | kubectl apply -f -
+    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/ingressroute-https.yaml.tpl" | kubectl apply -f -
+  else
+    warn "cert-manager não pronto — ArgoCD acessível via HTTP temporário"
+    warn "Reexecute bootstrap quando cert-manager subir para habilitar HTTPS"
+    kubectl delete ingressroute argocd-http argocd-https -n argocd --ignore-not-found=true 2>/dev/null || true
+    kubectl apply -f - <<EOF
+apiVersion: traefik.io/v1alpha1
+kind: IngressRoute
+metadata:
+  name: argocd-http-direct
+  namespace: argocd
+spec:
+  entryPoints:
+    - web
+  routes:
+    - match: Host(\`${host}\`)
+      kind: Rule
+      services:
+        - name: argocd-server
+          port: 80
+          scheme: http
+EOF
+  fi
 
   if helm_release_exists argocd argocd; then
     log "Atualizando URL externa do ArgoCD..."
     helm upgrade argocd argo/argo-cd -n argocd \
       --reuse-values \
       --set configs.cm.url="https://${host}" \
-      --wait --timeout 3m
+      --timeout 3m || warn "helm upgrade argocd URL falhou — ignorando"
   fi
 
   echo ""
-  echo "  ArgoCD UI: https://${host}"
+  if $tls_ready; then
+    echo "  ArgoCD UI: https://${host}"
+  else
+    echo "  ArgoCD UI (HTTP temp): http://${host}"
+  fi
   echo "  User: admin"
 }
 
@@ -188,9 +208,10 @@ gcloud container clusters get-credentials "$CLUSTER_NAME" \
   --project "$PROJECT_ID"
 
 install_argocd
-wait_for_argocd_controller 300
+wait_for_argocd_controller 180
 
-ensure_cert_manager
+# Dispara cert-manager cedo (sem bloquear) — pods sobem em paralelo com Traefik
+install_cert_manager &
 
 log "Aplicando AppProjects..."
 kubectl apply -f "$REPO_ROOT/gitops/argocd/projects/infra.yaml"
@@ -200,13 +221,22 @@ log "Aplicando Applications (Traefik + app)..."
 apply_application "$REPO_ROOT/gitops/argocd/applications/traefik-${ENV}.yaml"
 apply_application "$REPO_ROOT/gitops/argocd/applications/${ENV}.yaml"
 
-TRAEFIK_IP="$(wait_for_traefik_ip 600)"
-apply_argocd_ingress "$TRAEFIK_IP"
+# Aguarda cert-manager em background (não falha se demorar)
+wait %1 2>/dev/null || warn "install_cert_manager em background terminou com aviso"
+
+TRAEFIK_IP=""
+TRAEFIK_IP="$(wait_for_traefik_ip 600)" || true
+if [[ -z "$TRAEFIK_IP" ]]; then
+  warn "Traefik sem IP ainda — pulando IngressRoute ArgoCD"
+else
+  apply_argocd_ingress "$TRAEFIK_IP"
+fi
 
 echo ""
 echo "=============================================="
 echo " Bootstrap concluído!"
 echo "=============================================="
+kubectl get pods -n cert-manager 2>/dev/null || true
 echo ""
 kubectl get applications -n argocd 2>/dev/null || true
 echo ""

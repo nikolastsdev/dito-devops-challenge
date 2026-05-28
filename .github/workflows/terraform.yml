@@ -68,7 +68,8 @@ jobs:
       github.event_name == 'push' ||
       (github.event_name == 'workflow_dispatch' &&
        github.event.inputs.environment == 'staging' &&
-       github.event.inputs.action != 'destroy')
+       github.event.inputs.action != 'destroy' &&
+       github.event.inputs.action != 'bootstrap')
     runs-on: ubuntu-latest
     environment: staging
     defaults:
@@ -191,11 +192,17 @@ jobs:
         run: terraform apply -var-file=environments/production.tfvars -auto-approve -input=false
 
   # ── 6. Bootstrap Cluster Staging ─────────────────────────────────────────────
-  # Automático após apply-staging bem-sucedido
+  # Após apply-staging OU dispatch manual (action=bootstrap)
   bootstrap-cluster-staging:
     name: Bootstrap Cluster Staging
-    needs: apply-staging
-    if: always() && needs.apply-staging.result == 'success'
+    needs: [validate, apply-staging]
+    if: |
+      always() && (
+        needs.apply-staging.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' &&
+         github.event.inputs.environment == 'staging' &&
+         github.event.inputs.action == 'bootstrap')
+      )
     runs-on: ubuntu-latest
     environment: staging
     steps:
@@ -220,8 +227,14 @@ jobs:
   # ── 7. Bootstrap Cluster Production ──────────────────────────────────────────
   bootstrap-cluster-production:
     name: Bootstrap Cluster Production
-    needs: apply-production
-    if: always() && needs.apply-production.result == 'success'
+    needs: [validate, apply-production]
+    if: |
+      always() && (
+        needs.apply-production.result == 'success' ||
+        (github.event_name == 'workflow_dispatch' &&
+         github.event.inputs.environment == 'production' &&
+         github.event.inputs.action == 'bootstrap')
+      )
     runs-on: ubuntu-latest
     environment: production
     steps:
