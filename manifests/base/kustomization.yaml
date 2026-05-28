@@ -3,9 +3,11 @@ kind: Kustomization
 
 namespace: dito-app
 
-commonLabels:
-  app.kubernetes.io/part-of: dito-devops-challenge
-  app.kubernetes.io/managed-by: argocd
+labels:
+  - pairs:
+      app.kubernetes.io/part-of: dito-devops-challenge
+      app.kubernetes.io/managed-by: argocd
+    includeSelectors: false
 
 resources:
   - configmap-service.yaml

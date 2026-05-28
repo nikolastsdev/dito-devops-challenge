@@ -3,11 +3,11 @@ kind: Kustomization
 
 namespace: dito-app
 
-namePrefix: staging-
-
-commonLabels:
-  environment: staging
-  app.kubernetes.io/version: staging
+labels:
+  - pairs:
+      environment: staging
+      app.kubernetes.io/version: staging
+    includeSelectors: false
 
 resources:
   - ../../base
@@ -19,5 +19,5 @@ patches:
 
 images:
   - name: southamerica-east1-docker.pkg.dev/PROJECT/dito-api-staging/dito-api
-    newName: southamerica-east1-docker.pkg.dev/PROJECT/dito-api-staging/dito-api
+    newName: southamerica-east1-docker.pkg.dev/dito-staging/dito-api-staging/dito-api
     newTag: staging-latest
