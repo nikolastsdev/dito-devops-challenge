@@ -139,12 +139,16 @@ apply_application() {
   kubectl apply -f "$1"
 }
 
+render_template() {
+  local tpl="$1" host="$2"
+  sed "s/__ARGOCD_HOST__/${host}/g" "$tpl"
+}
+
 apply_argocd_ingress() {
   local traefik_ip="$1"
   local host="argocd.${traefik_ip}.nip.io"
   local tls_ready=false
 
-  export ARGOCD_HOST="$host"
   cert_manager_ready && tls_ready=true
 
   log "Configurando IngressRoute ArgoCD: https://${host}"
@@ -152,10 +156,10 @@ apply_argocd_ingress() {
   if $tls_ready; then
     log "cert-manager pronto — aplicando Certificate + HTTPS"
     ensure_cluster_issuer
-    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/middleware-redirect.yaml.tpl" | kubectl apply -f -
-    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/ingressroute-http.yaml.tpl" | kubectl apply -f -
-    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/certificate.yaml.tpl" | kubectl apply -f -
-    envsubst '${ARGOCD_HOST}' < "$ARGOCD_INGRESS_DIR/ingressroute-https.yaml.tpl" | kubectl apply -f -
+    render_template "$ARGOCD_INGRESS_DIR/middleware-redirect.yaml.tpl" "$host" | kubectl apply -f -
+    render_template "$ARGOCD_INGRESS_DIR/ingressroute-http.yaml.tpl" "$host" | kubectl apply -f -
+    render_template "$ARGOCD_INGRESS_DIR/certificate.yaml.tpl" "$host" | kubectl apply -f -
+    render_template "$ARGOCD_INGRESS_DIR/ingressroute-https.yaml.tpl" "$host" | kubectl apply -f -
   else
     warn "cert-manager não pronto — ArgoCD acessível via HTTP temporário"
     warn "Reexecute bootstrap quando cert-manager subir para habilitar HTTPS"
@@ -170,7 +174,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(\`${host}\`)
+    - match: "Host(\`${host}\`)"
       kind: Rule
       services:
         - name: argocd-server

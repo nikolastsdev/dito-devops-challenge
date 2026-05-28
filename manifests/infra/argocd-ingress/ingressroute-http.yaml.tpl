@@ -10,7 +10,7 @@ spec:
   entryPoints:
     - web
   routes:
-    - match: Host(`${ARGOCD_HOST}`)
+    - match: "Host(`__ARGOCD_HOST__`)"
       kind: Rule
       middlewares:
         - name: redirect-https

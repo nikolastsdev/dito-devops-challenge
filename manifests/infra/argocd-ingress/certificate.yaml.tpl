@@ -12,4 +12,4 @@ spec:
     name: letsencrypt-prod
     kind: ClusterIssuer
   dnsNames:
-    - ${ARGOCD_HOST}
+    - __ARGOCD_HOST__

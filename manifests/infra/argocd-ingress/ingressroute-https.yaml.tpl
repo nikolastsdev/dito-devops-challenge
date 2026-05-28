@@ -10,7 +10,7 @@ spec:
   entryPoints:
     - websecure
   routes:
-    - match: Host(`${ARGOCD_HOST}`)
+    - match: "Host(`__ARGOCD_HOST__`)"
       kind: Rule
       services:
         - name: argocd-server
