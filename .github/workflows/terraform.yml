@@ -294,43 +294,8 @@ jobs:
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
         run: |
-          TF_ARGS=(
-            -var-file=environments/staging.tfvars
-            -var="gke_deletion_protection=false"
-            -auto-approve
-            -input=false
-          )
-
-          # Desabilita deletion protection via API (gcloud não tem flag estável)
-          if gcloud container clusters describe dito-gke-staging \
-            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_STAGING }} &>/dev/null; then
-            TOKEN="$(gcloud auth print-access-token)"
-            curl -sf -X PATCH \
-              "https://container.googleapis.com/v1/projects/${{ vars.GCP_PROJECT_ID_STAGING }}/locations/southamerica-east1/clusters/dito-gke-staging?updateMask=deletionProtection" \
-              -H "Authorization: Bearer ${TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d '{"deletionProtection": false}' || true
-          fi
-
-          echo "=== Stage 1: GKE + IAM ==="
-          terraform destroy -target=module.iam "${TF_ARGS[@]}" || true
-          terraform destroy -target=module.kubernetes "${TF_ARGS[@]}" || true
-          sleep 60
-
-          echo "=== Stage 2: Database ==="
-          terraform destroy -target=module.database "${TF_ARGS[@]}" || true
-          sleep 90
-
-          echo "=== Stage 3: Restante ==="
-          for attempt in 1 2 3; do
-            echo "Destroy attempt $attempt/3..."
-            if terraform destroy "${TF_ARGS[@]}"; then
-              exit 0
-            fi
-            echo "Destroy falhou — aguardando 120s antes de retry..."
-            sleep 120
-          done
-          exit 1
+          chmod +x ../scripts/terraform-destroy.sh
+          ../scripts/terraform-destroy.sh staging
 
   # ── 9. Destroy Production ─────────────────────────────────────────────────────
   destroy-production:
@@ -369,39 +334,5 @@ jobs:
         env:
           TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
         run: |
-          TF_ARGS=(
-            -var-file=environments/production.tfvars
-            -var="gke_deletion_protection=false"
-            -auto-approve
-            -input=false
-          )
-
-          if gcloud container clusters describe dito-gke-production \
-            --region southamerica-east1 --project ${{ vars.GCP_PROJECT_ID_PRODUCTION }} &>/dev/null; then
-            TOKEN="$(gcloud auth print-access-token)"
-            curl -sf -X PATCH \
-              "https://container.googleapis.com/v1/projects/${{ vars.GCP_PROJECT_ID_PRODUCTION }}/locations/southamerica-east1/clusters/dito-gke-production?updateMask=deletionProtection" \
-              -H "Authorization: Bearer ${TOKEN}" \
-              -H "Content-Type: application/json" \
-              -d '{"deletionProtection": false}' || true
-          fi
-
-          echo "=== Stage 1: GKE + IAM ==="
-          terraform destroy -target=module.iam "${TF_ARGS[@]}" || true
-          terraform destroy -target=module.kubernetes "${TF_ARGS[@]}" || true
-          sleep 60
-
-          echo "=== Stage 2: Database ==="
-          terraform destroy -target=module.database "${TF_ARGS[@]}" || true
-          sleep 90
-
-          echo "=== Stage 3: Restante ==="
-          for attempt in 1 2 3; do
-            echo "Destroy attempt $attempt/3..."
-            if terraform destroy "${TF_ARGS[@]}"; then
-              exit 0
-            fi
-            echo "Destroy falhou — aguardando 120s antes de retry..."
-            sleep 120
-          done
-          exit 1
+          chmod +x ../scripts/terraform-destroy.sh
+          ../scripts/terraform-destroy.sh production
