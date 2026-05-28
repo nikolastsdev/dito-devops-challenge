@@ -1,0 +1,16 @@
+apiVersion: networking.k8s.io/v1
+kind: Ingress
+metadata:
+  name: groove
+spec:
+  rules:
+    # Sem host fixo — aceita IP público ou xxx.nip.io (output: terraform output groove_public_url)
+    - http:
+        paths:
+          - path: /
+            pathType: Prefix
+            backend:
+              service:
+                name: dito-api
+                port:
+                  name: http

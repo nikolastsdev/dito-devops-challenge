@@ -1,0 +1,7 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dito-api-config
+data:
+  DB_HOST: "10.x.x.x"
+  LOG_LEVEL: debug

@@ -1,0 +1,82 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: traefik-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: traefik
+    environment: staging
+  annotations:
+    # sync-wave: "-1" garante que o Traefik sobe ANTES da app Groove
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: infra
+
+  source:
+    repoURL: https://helm.traefik.io/traefik
+    chart: traefik
+    targetRevision: "33.x"
+    helm:
+      releaseName: traefik
+      values: |
+        deployment:
+          replicas: 2
+
+        # Usa o IP estático reservado pelo Terraform
+        # Valor injetado manualmente ou via kustomize overlay após terraform output
+        service:
+          type: LoadBalancer
+          annotations:
+            networking.gke.io/load-balancer-ip-addresses: "dito-traefik-staging"
+
+        # Porta HTTP 80 — HTTPS pode ser adicionado depois via cert-manager
+        ports:
+          web:
+            port: 8000
+            expose:
+              default: true
+            exposedPort: 80
+
+        # Não subir dashboard em staging exposto publicamente
+        ingressRoute:
+          dashboard:
+            enabled: false
+
+        # IngressClass padrão
+        ingressClass:
+          enabled: true
+          isDefaultClass: false
+          name: traefik
+
+        resources:
+          requests:
+            cpu: 50m
+            memory: 64Mi
+          limits:
+            cpu: 300m
+            memory: 256Mi
+
+        # Anti-affinity: pods em nodes diferentes
+        affinity:
+          podAntiAffinity:
+            preferredDuringSchedulingIgnoredDuringExecution:
+              - weight: 100
+                podAffinityTerm:
+                  labelSelector:
+                    matchLabels:
+                      app.kubernetes.io/name: traefik
+                  topologyKey: kubernetes.io/hostname
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: traefik
+
+  syncPolicy:
+    automated:
+      prune: true
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+
+  revisionHistoryLimit: 3

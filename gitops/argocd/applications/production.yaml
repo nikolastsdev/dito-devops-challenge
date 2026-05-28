@@ -1,0 +1,34 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: dito-api-production
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: dito-api
+    environment: production
+  finalizers:
+    - resources-finalizer.argocd.argoproj.io
+spec:
+  project: dito-challenge
+
+  source:
+    repoURL: https://github.com/nikolasschaffer/dito-devops-challenge
+    targetRevision: main
+    path: manifests/overlays/production
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: dito-app
+
+  # Production: sync manual — requer aprovação humana no ArgoCD UI ou CLI
+  syncPolicy:
+    syncOptions:
+      - CreateNamespace=true
+    retry:
+      limit: 3
+      backoff:
+        duration: 10s
+        factor: 2
+        maxDuration: 2m
+
+  revisionHistoryLimit: 10

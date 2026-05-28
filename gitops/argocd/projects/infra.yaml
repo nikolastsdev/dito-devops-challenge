@@ -1,0 +1,27 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: infra
+  namespace: argocd
+spec:
+  description: Projeto GitOps — componentes de infraestrutura do cluster (Traefik, ESO, etc.)
+  sourceRepos:
+    # Charts Helm oficiais dos componentes
+    - https://helm.traefik.io/traefik
+    - https://charts.external-secrets.io
+    # Repo do desafio (manifests de config)
+    - https://github.com/nikolasschaffer/dito-devops-challenge
+  destinations:
+    - namespace: traefik
+      server: https://kubernetes.default.svc
+    - namespace: external-secrets
+      server: https://kubernetes.default.svc
+    - namespace: argocd
+      server: https://kubernetes.default.svc
+  # Componentes de infra precisam criar ClusterRoles, CRDs etc.
+  clusterResourceWhitelist:
+    - group: "*"
+      kind: "*"
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

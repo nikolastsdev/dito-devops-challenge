@@ -1,0 +1,20 @@
+{
+  "name": "dito-devops-challenge-app",
+  "private": true,
+  "version": "1.0.0",
+  "description": "API Node.js + React — Desafio DevOps Dito",
+  "scripts": {
+    "dev": "concurrently \"npm run dev:server\" \"npm run dev:web\"",
+    "dev:server": "npm run dev --prefix server",
+    "dev:web": "npm run dev --prefix web",
+    "build": "npm run build --prefix web && npm run build --prefix server",
+    "start": "npm run start --prefix server",
+    "lint": "npm run lint --prefix server && npm run lint --prefix web"
+  },
+  "devDependencies": {
+    "concurrently": "^9.1.2"
+  },
+  "engines": {
+    "node": ">=20"
+  }
+}

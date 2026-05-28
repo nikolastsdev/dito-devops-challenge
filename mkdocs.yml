@@ -1,0 +1,100 @@
+site_name: Dito DevOps Challenge
+site_description: Infraestrutura, GitOps e CI/CD — Desafio DevOps III
+site_url: https://nikolasschafer.github.io/dito-devops-challenge/
+repo_url: https://github.com/nikolasschafer/dito-devops-challenge
+repo_name: nikolasschafer/dito-devops-challenge
+edit_uri: edit/main/docs/
+
+theme:
+  name: material
+  language: pt
+  palette:
+    - scheme: default
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-7
+        name: Modo escuro
+    - scheme: slate
+      primary: indigo
+      accent: indigo
+      toggle:
+        icon: material/brightness-4
+        name: Modo claro
+  features:
+    - navigation.instant
+    - navigation.tabs
+    - navigation.sections
+    - navigation.top
+    - navigation.footer
+    - toc.follow
+    - content.code.copy
+    - search.suggest
+    - search.highlight
+  icon:
+    repo: fontawesome/brands/github
+
+nav:
+  - Início: index.md
+  - Arquitetura:
+      - architecture/overview.md
+      - architecture/diagrams.md
+      - architecture/network.md
+      - architecture/gitops-flow.md
+  - Decisões (ADRs):
+      - decisions/index.md
+      - decisions/001-cloud-provider.md
+      - decisions/002-kubernetes-gke.md
+      - decisions/003-database-postgres.md
+      - decisions/004-secrets-vault.md
+      - decisions/005-gitops-argocd.md
+      - decisions/006-cicd-github-actions.md
+      - decisions/007-official-terraform-modules.md
+  - Runbook:
+      - runbook/multi-project-setup.md
+      - runbook/prerequisites.md
+      - runbook/gcp-setup.md
+      - runbook/secrets-setup.md
+      - runbook/budget-and-costs.md
+      - runbook/local-development.md
+      - runbook/terraform.md
+      - runbook/terraform-first-run.md
+      - runbook/github-setup.md
+  - CI/CD:
+      - ci-cd/pipeline-diagrams.md
+      - ci-cd/workflows.md
+      - ci-cd/manifests-validation.md
+      - ci-cd/promotion-strategy.md
+  - Riscos e limitações: risks/limitations.md
+
+plugins:
+  - search:
+      lang: pt
+  - git-revision-date-localized:
+      enable_creation_date: true
+      type: timeago
+      locale: pt
+      fallback_to_build_date: true
+
+markdown_extensions:
+  - admonition
+  - pymdownx.details
+  - pymdownx.superfences:
+      custom_fences:
+        - name: mermaid
+          class: mermaid
+          format: !!python/name:pymdownx.superfences.fence_code_format
+  - pymdownx.highlight:
+      anchor_linenums: true
+  - pymdownx.tabbed:
+      alternate_style: true
+  - pymdownx.tasklist:
+      custom_checkbox: true
+  - tables
+  - toc:
+      permalink: true
+
+extra:
+  social:
+    - icon: fontawesome/brands/github
+      link: https://github.com/nikolasschafer

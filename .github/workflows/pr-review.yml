@@ -1,0 +1,74 @@
+name: PR Review
+
+on:
+  pull_request:
+    types: [opened, synchronize, reopened]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  checklist:
+    name: Automated Review Checklist
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+
+      - name: Validate Kustomize manifests
+        run: |
+          if command -v kubectl >/dev/null 2>&1; then
+            kubectl kustomize manifests/overlays/staging > /dev/null
+            kubectl kustomize manifests/overlays/production > /dev/null
+            echo "Kustomize builds OK"
+          else
+            echo "kubectl não disponível — instale para validação local"
+          fi
+
+      - name: Terraform fmt check
+        if: hashFiles('iac/**') != ''
+        run: |
+          docker run --rm -v "$PWD/iac:/data" hashicorp/terraform:1.11.3 fmt -check -recursive /data || true
+
+      - name: Post review checklist
+        uses: actions/github-script@v7
+        with:
+          script: |
+            const fs = require('fs');
+            const changed = await github.paginate(
+              github.rest.pulls.listFiles,
+              { owner: context.repo.owner, repo: context.repo.repo, pull_number: context.issue.number }
+            );
+            const paths = changed.map(f => f.filename);
+            const checks = [
+              { label: 'IaC (iac/)', ok: paths.some(p => p.startsWith('iac/')) },
+              { label: 'App (app/)', ok: paths.some(p => p.startsWith('app/')) },
+              { label: 'Manifests (manifests/)', ok: paths.some(p => p.startsWith('manifests/')) },
+              { label: 'Docs (docs/)', ok: paths.some(p => p.startsWith('docs/')) },
+            ];
+            const body = [
+              '## 🤖 Review automatizado — Desafio DevOps',
+              '',
+              'Checklist baseado nos arquivos alterados neste PR:',
+              '',
+              ...checks.map(c => `- ${c.ok ? '✅' : '⬜'} ${c.label}`),
+              '',
+              '### Validações recomendadas (manifests/)',
+              '- `kubeconform` — schema Kubernetes',
+              '- `kube-score` — boas práticas',
+              '- `kustomize build` — renderização',
+              '- `conftest` — policies (securityContext, probes, replicas ≥ 2)',
+              '',
+              '### Segurança',
+              '- Secrets não expostos em logs ou manifests',
+              '- `DB_PASSWORD` via Secret/ExternalSecret apenas',
+              '- Imagens escaneadas com Trivy no workflow `app-build.yml`',
+              '',
+              '> Documentação completa: [manifests-validation](https://nikolasschafer.github.io/dito-devops-challenge/ci-cd/manifests-validation/)',
+            ].join('\n');
+            github.rest.issues.createComment({
+              issue_number: context.issue.number,
+              owner: context.repo.owner,
+              repo: context.repo.repo,
+              body
+            });

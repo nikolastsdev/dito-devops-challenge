@@ -1,0 +1,121 @@
+name: App Build
+
+on:
+  pull_request:
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-build.yml'
+  push:
+    branches: [main]
+    paths:
+      - 'app/**'
+      - '.github/workflows/app-build.yml'
+
+permissions:
+  contents: read
+  security-events: write
+  id-token: write
+
+env:
+  IMAGE_NAME: dito-api
+  GCP_REGION: southamerica-east1
+
+jobs:
+  build:
+    name: Build & Scan
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: app
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+
+      - name: Install dependencies
+        run: |
+          npm install
+          npm install --prefix server
+          npm install --prefix web
+
+      - name: Lint TypeScript
+        run: npm run lint
+
+      - name: Build application
+        run: npm run build
+
+      - name: Build Docker image
+        run: |
+          PROJECT="${{ vars.GCP_PROJECT_ID_STAGING || 'dito-staging' }}"
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          docker build -t "$IMAGE" .
+
+      - name: Trivy vulnerability scan
+        uses: aquasecurity/trivy-action@0.28.0
+        with:
+          image-ref: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_STAGING || 'dito-staging' }}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          format: sarif
+          output: trivy-results.sarif
+          severity: CRITICAL,HIGH
+        continue-on-error: true
+
+  push-staging:
+    name: Push Staging
+    needs: build
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.GCP_PROJECT_ID_STAGING != ''
+    runs-on: ubuntu-latest
+    environment: staging
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID_STAGING }}
+
+      - name: Push image to Artifact Registry (staging)
+        run: |
+          PROJECT="${{ vars.GCP_PROJECT_ID_STAGING }}"
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+          docker build -t "$IMAGE" app/
+          docker push "$IMAGE"
+          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+
+  push-production:
+    name: Push Production
+    needs: push-staging
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.GCP_PROJECT_ID_PRODUCTION != ''
+    runs-on: ubuntu-latest
+    environment: production
+    permissions:
+      contents: read
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
+
+      - name: Push image to Artifact Registry (production)
+        run: |
+          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
+          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}:${{ github.sha }}"
+          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
+          docker build -t "$IMAGE" app/
+          docker push "$IMAGE"

@@ -1,0 +1,18 @@
+apiVersion: argoproj.io/v1alpha1
+kind: AppProject
+metadata:
+  name: dito-challenge
+  namespace: argocd
+spec:
+  description: Projeto GitOps — Groove app (Desafio DevOps Dito)
+  sourceRepos:
+    - https://github.com/nikolasschaffer/dito-devops-challenge
+  destinations:
+    - namespace: dito-app
+      server: https://kubernetes.default.svc
+  clusterResourceWhitelist:
+    - group: ""
+      kind: Namespace
+  namespaceResourceWhitelist:
+    - group: "*"
+      kind: "*"

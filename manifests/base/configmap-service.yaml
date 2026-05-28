@@ -1,0 +1,40 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: dito-app
+  labels:
+    app.kubernetes.io/part-of: dito-devops-challenge
+---
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: dito-api-config
+  namespace: dito-app
+  labels:
+    app.kubernetes.io/name: dito-api
+    app.kubernetes.io/component: backend
+    app.kubernetes.io/managed-by: kustomize
+data:
+  NODE_ENV: production
+  DB_HOST: "10.x.x.x"
+  DB_PORT: "5432"
+  DB_NAME: groove
+  DB_USER: postgres
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: dito-api
+  namespace: dito-app
+  labels:
+    app.kubernetes.io/name: dito-api
+    app.kubernetes.io/component: backend
+spec:
+  type: ClusterIP
+  selector:
+    app.kubernetes.io/name: dito-api
+  ports:
+    - name: http
+      port: 80
+      targetPort: http
+      protocol: TCP
