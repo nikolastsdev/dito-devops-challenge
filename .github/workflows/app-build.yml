@@ -19,9 +19,12 @@ permissions:
 env:
   IMAGE_NAME: dito-api
   GCP_REGION: southamerica-east1
+  KUSTOMIZE_VERSION: v5.4.3
+  # Nome lógico da imagem na base (chave usada pelo `kustomize edit set image`)
+  BASE_IMAGE: southamerica-east1-docker.pkg.dev/PROJECT/dito-api-staging/dito-api
 
 jobs:
-  # ── 1. Build, lint, test e scan ─────────────────────────────────────────────
+  # ── 1. Build, lint e scan (PR + push) ───────────────────────────────────────
   build:
     name: Build & Scan
     runs-on: ubuntu-latest
@@ -47,7 +50,7 @@ jobs:
       - name: Build application
         run: npm run build
 
-      - name: Build Docker image
+      - name: Build Docker image (local, para scan)
         run: docker build -t "${{ env.IMAGE_NAME }}:ci" .
 
       - name: Trivy vulnerability scan
@@ -66,17 +69,16 @@ jobs:
           sarif_file: app/trivy-results.sarif
         continue-on-error: true
 
-  # ── 2. Push para staging + atualiza manifesto (GitOps) ──────────────────────
-  # Roda apenas em push para main — dispara deploy automático via ArgoCD
-  push-staging:
-    name: Push & Deploy Staging
+  # ── 2. Deploy staging (push main) — build once, push by digest, GitOps ──────
+  deploy-staging:
+    name: Deploy Staging
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
-      contents: write  # necessário para commit do manifesto kustomize
-      id-token: write
+      contents: write   # commit do manifesto kustomize
+      id-token: write    # WIF
     steps:
       - uses: actions/checkout@v4
 
@@ -89,91 +91,57 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID_STAGING }}
 
-      - name: Build & Push image (staging)
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${{ env.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Build & push image (by digest)
+        id: push
+        uses: docker/build-push-action@v6
+        with:
+          context: app
+          push: true
+          tags: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_STAGING }}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          cache-from: type=gha
+          cache-to: type=gha,mode=max
+
+      - name: Install kustomize
         run: |
-          PROJECT="${{ vars.GCP_PROJECT_ID_STAGING }}"
-          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
-          REPO="${REGISTRY}/${PROJECT}/dito-api-staging/${{ env.IMAGE_NAME }}"
-          gcloud auth configure-docker "${REGISTRY}" --quiet
-          docker build -t "${REPO}:${{ github.sha }}" app/
-          docker push "${REPO}:${{ github.sha }}"
+          curl -sLo kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${{ env.KUSTOMIZE_VERSION }}/kustomize_${{ env.KUSTOMIZE_VERSION }}_linux_amd64.tar.gz"
+          tar -xzf kustomize.tar.gz
+          sudo mv kustomize /usr/local/bin/
 
-      - name: Update staging manifest (GitOps)
+      - name: Update staging overlay (kustomize edit set image)
+        env:
+          NEW_NAME: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_STAGING }}/dito-api-staging/${{ env.IMAGE_NAME }}
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          SHA="${{ github.sha }}"
-          FILE="manifests/overlays/staging/kustomization.yaml"
+          cd manifests/overlays/staging
+          # Referência por digest (sha256) — imutável, rastreável, padrão GitOps
+          kustomize edit set image "${BASE_IMAGE}=${NEW_NAME}@${DIGEST}"
+          cat kustomization.yaml
 
-          sed -i "s|newTag: .*|newTag: ${SHA}|" "${FILE}"
-
+      - name: Commit & push manifest
+        run: |
+          SHORT="${GITHUB_SHA:0:7}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "${FILE}"
-          git diff --cached --quiet || git commit -m "chore(deploy): staging → ${SHA:0:7} [skip ci]"
-          git push origin main
+          git add manifests/overlays/staging/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Nenhuma mudança no manifesto — nada a commitar"
+            exit 0
+          fi
+          git commit -m "chore(deploy): staging dito-api @ ${SHORT} [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main
 
       - name: Summary
+        env:
+          DIGEST: ${{ steps.push.outputs.digest }}
         run: |
-          echo "### Deploy Staging" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SHA**: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Image**: \`${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_STAGING }}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- ArgoCD sincronizará automaticamente o staging" >> "$GITHUB_STEP_SUMMARY"
-
-  # ── 3. Promote para production (requer aprovação no GitHub Environment) ──────
-  # O job fica pendente até um reviewer aprovar em:
-  # GitHub → Settings → Environments → production → Required reviewers
-  promote-production:
-    name: Promote to Production
-    needs: push-staging
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment: production   # <- pausa aqui e pede aprovação
-    permissions:
-      contents: write
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-        with:
-          ref: main   # sempre pega main atualizado após o commit do push-staging
-
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
-
-      - name: Build & Push image (production)
-        run: |
-          SHA="${{ github.sha }}"
-          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
-          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
-          REPO="${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}"
-          gcloud auth configure-docker "${REGISTRY}" --quiet
-          docker build -t "${REPO}:${SHA}" app/
-          docker push "${REPO}:${SHA}"
-
-      - name: Update production manifest (GitOps)
-        run: |
-          SHA="${{ github.sha }}"
-          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
-          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
-          FILE="manifests/overlays/production/kustomization.yaml"
-
-          sed -i "s|newName: .*|newName: ${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}|" "${FILE}"
-          sed -i "s|newTag: .*|newTag: ${SHA}|" "${FILE}"
-
-          git config user.name "github-actions[bot]"
-          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "${FILE}"
-          git diff --cached --quiet || git commit -m "chore(deploy): production → ${SHA:0:7} [skip ci]"
-          git push origin main
-
-      - name: Summary
-        run: |
-          SHA="${{ github.sha }}"
-          echo "### Promote Production" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SHA**: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Image**: \`${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_PRODUCTION }}/dito-api-production/${{ env.IMAGE_NAME }}:${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- ArgoCD sincronizará automaticamente o production" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### 🚀 Deploy Staging"
+            echo "- **Commit**: \`${GITHUB_SHA:0:7}\`"
+            echo "- **Digest**: \`${DIGEST}\`"
+            echo "- ArgoCD sincroniza o staging automaticamente ao detectar o commit no manifesto"
+          } >> "$GITHUB_STEP_SUMMARY"

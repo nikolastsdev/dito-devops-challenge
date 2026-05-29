@@ -16,11 +16,12 @@ module "network" {
 module "registry" {
   source = "./modules/registry"
 
-  project_id   = var.project_id
-  region       = var.region
-  environment  = var.environment
-  project_name = var.project_name
-  labels       = local.common_labels
+  project_id                = var.project_id
+  region                    = var.region
+  environment               = var.environment
+  project_name              = var.project_name
+  labels                    = local.common_labels
+  additional_reader_members = var.registry_additional_readers
 }
 
 module "secrets" {

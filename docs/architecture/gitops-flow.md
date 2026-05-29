@@ -8,8 +8,8 @@ Promoção **staging → production** via **Pull Request** que altera apenas o o
 manifests/
 ├── base/                    # Comum a todos os ambientes
 └── overlays/
-    ├── staging/             # tag: staging-latest — sync automático
-    └── production/          # tag: v1.0.0 — sync manual
+    ├── staging/             # imagem por digest (sha256) — deploy automático no push para main
+    └── production/          # mesmo digest promovido de staging — promoção deliberada
 ```
 
 ### Por que diretórios e não branches?

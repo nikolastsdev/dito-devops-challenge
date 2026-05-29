@@ -38,6 +38,12 @@ use_existing_ci_service_account = true
 manage_wif_identity_pool        = false
 existing_wif_provider           = "projects/747897055808/locations/global/workloadIdentityPools/github-pool/providers/github"
 
+# Image promotion: a SA CI de production lê o registry de staging para copiar
+# o mesmo digest (sem rebuild) durante o app-promote.yml.
+registry_additional_readers = [
+  "serviceAccount:dito-ci@dito-production.iam.gserviceaccount.com",
+]
+
 labels = {
   owner       = "nikolastsdev"
   challenge   = "dito-devops-iii"

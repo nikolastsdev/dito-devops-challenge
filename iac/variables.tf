@@ -171,3 +171,9 @@ variable "gke_deletion_protection" {
   type        = bool
   default     = null
 }
+
+variable "registry_additional_readers" {
+  description = "Membros IAM com leitura no Artifact Registry deste ambiente (ex.: SA de production para promover imagem de staging)"
+  type        = list(string)
+  default     = []
+}

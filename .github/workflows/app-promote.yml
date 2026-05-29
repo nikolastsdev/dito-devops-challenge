@@ -1,10 +1,13 @@
 name: Promote to Production
 
+# Promoção é uma AÇÃO DELIBERADA (não dispara em todo merge).
+# Promove o EXATO artefato já testado em staging — copia a imagem por digest
+# entre os Artifact Registries (sem rebuild) e atualiza o overlay de production.
 on:
   workflow_dispatch:
     inputs:
-      sha:
-        description: 'Git SHA a promover (vazio = promove o SHA atual do staging)'
+      digest:
+        description: 'Digest a promover (vazio = usa o digest atual do staging)'
         required: false
         type: string
 
@@ -15,37 +18,36 @@ permissions:
 env:
   IMAGE_NAME: dito-api
   GCP_REGION: southamerica-east1
+  KUSTOMIZE_VERSION: v5.4.3
+  BASE_IMAGE: southamerica-east1-docker.pkg.dev/PROJECT/dito-api-staging/dito-api
 
 jobs:
   promote:
-    name: Promote Staging → Production
+    name: Staging → Production
     runs-on: ubuntu-latest
-    environment: production
+    environment: production   # approval gate: Settings → Environments → production
     steps:
       - uses: actions/checkout@v4
 
-      - name: Resolve SHA a promover
-        id: sha
+      - name: Resolve source image (staging)
+        id: src
         run: |
-          if [[ -n "${{ inputs.sha }}" ]]; then
-            SHA="${{ inputs.sha }}"
-          else
-            # Lê o SHA atual do manifesto de staging
-            SHA=$(grep 'newTag:' manifests/overlays/staging/kustomization.yaml | awk '{print $2}' | tr -d '"')
+          STAGING_FILE="manifests/overlays/staging/kustomization.yaml"
+          SRC_NAME=$(awk '/newName:/{print $2}' "$STAGING_FILE" | tail -1)
+
+          DIGEST="${{ inputs.digest }}"
+          if [ -z "$DIGEST" ]; then
+            DIGEST=$(awk '/digest:/{print $2}' "$STAGING_FILE" | tail -1)
           fi
 
-          if [[ -z "$SHA" || "$SHA" == "staging-latest" ]]; then
-            echo "Erro: SHA inválido ou staging ainda não foi deployado ('${SHA}')" >&2
+          if [ -z "$DIGEST" ] || [ -z "$SRC_NAME" ]; then
+            echo "::error::Não foi possível resolver imagem/digest de staging (name='${SRC_NAME}', digest='${DIGEST}')"
             exit 1
           fi
 
-          echo "sha=${SHA}" >> "$GITHUB_OUTPUT"
-          echo "Promovendo SHA: ${SHA}"
-
-      - uses: actions/checkout@v4
-        with:
-          ref: ${{ steps.sha.outputs.sha }}
-          path: app-src
+          echo "src_name=${SRC_NAME}" >> "$GITHUB_OUTPUT"
+          echo "digest=${DIGEST}"     >> "$GITHUB_OUTPUT"
+          echo "Promovendo ${SRC_NAME}@${DIGEST}"
 
       - uses: google-github-actions/auth@v2
         with:
@@ -56,37 +58,65 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
 
-      - name: Build & Push image (production)
+      - name: Configure Docker auth
+        run: gcloud auth configure-docker "${{ env.GCP_REGION }}-docker.pkg.dev" --quiet
+
+      - name: Copy image staging → production (preserva digest)
+        id: copy
+        env:
+          SRC: ${{ steps.src.outputs.src_name }}@${{ steps.src.outputs.digest }}
+          DST_NAME: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_PRODUCTION }}/dito-api-production/${{ env.IMAGE_NAME }}
         run: |
-          SHA="${{ steps.sha.outputs.sha }}"
-          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
-          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
-          REPO="${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}"
-          gcloud auth configure-docker "${REGISTRY}" --quiet
-          docker build -t "${REPO}:${SHA}" app-src/app/
-          docker push "${REPO}:${SHA}"
+          SHORT="${{ steps.src.outputs.digest }}"
+          SHORT="${SHORT#sha256:}"; SHORT="${SHORT:0:12}"
+          # buildx imagetools copia o manifest entre registries SEM rebuild,
+          # preservando o digest original — o bit-a-bit testado em staging.
+          docker buildx imagetools create \
+            --tag "${DST_NAME}:promoted-${SHORT}" \
+            "${SRC}"
+          echo "dst_name=${DST_NAME}" >> "$GITHUB_OUTPUT"
 
-      - name: Update production manifest (GitOps)
+      - name: Install kustomize
         run: |
-          SHA="${{ steps.sha.outputs.sha }}"
-          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
-          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
-          NEW_NAME="${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}"
-          FILE="manifests/overlays/production/kustomization.yaml"
+          curl -sLo kustomize.tar.gz \
+            "https://github.com/kubernetes-sigs/kustomize/releases/download/kustomize%2F${{ env.KUSTOMIZE_VERSION }}/kustomize_${{ env.KUSTOMIZE_VERSION }}_linux_amd64.tar.gz"
+          tar -xzf kustomize.tar.gz
+          sudo mv kustomize /usr/local/bin/
 
-          sed -i "s|newName: .*|newName: ${NEW_NAME}|" "${FILE}"
-          sed -i "s|newTag: .*|newTag: ${SHA}|"         "${FILE}"
+      - name: Update production overlay (kustomize edit set image)
+        env:
+          DST_NAME: ${{ steps.copy.outputs.dst_name }}
+          DIGEST: ${{ steps.src.outputs.digest }}
+        run: |
+          cd manifests/overlays/production
+          kustomize edit set image "${BASE_IMAGE}=${DST_NAME}@${DIGEST}"
+          cat kustomization.yaml
 
+      - name: Commit & push manifest
+        env:
+          DIGEST: ${{ steps.src.outputs.digest }}
+        run: |
+          SHORT="${DIGEST#sha256:}"; SHORT="${SHORT:0:12}"
           git config user.name "github-actions[bot]"
           git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
-          git add "${FILE}"
-          git diff --cached --quiet || git commit -m "chore(deploy): production → ${SHA:0:7} [skip ci]"
-          git push origin main
+          git add manifests/overlays/production/kustomization.yaml
+          if git diff --cached --quiet; then
+            echo "Production já está neste digest — nada a promover"
+            exit 0
+          fi
+          git commit -m "chore(deploy): production dito-api @ ${SHORT} [skip ci]"
+          git pull --rebase origin main
+          git push origin HEAD:main
 
       - name: Summary
+        env:
+          DIGEST: ${{ steps.src.outputs.digest }}
+          DST_NAME: ${{ steps.copy.outputs.dst_name }}
         run: |
-          SHA="${{ steps.sha.outputs.sha }}"
-          echo "### Promote Production" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **SHA promovido**: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- **Image**: \`${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_PRODUCTION }}/dito-api-production/${{ env.IMAGE_NAME }}:${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
-          echo "- ArgoCD sincronizará automaticamente o production" >> "$GITHUB_STEP_SUMMARY"
+          {
+            echo "### 🏭 Promote Production"
+            echo "- **Digest promovido**: \`${DIGEST}\`"
+            echo "- **Imagem**: \`${DST_NAME}@${DIGEST}\`"
+            echo "- Mesmo artefato validado em staging (sem rebuild)"
+            echo "- ArgoCD sincroniza o production automaticamente"
+          } >> "$GITHUB_STEP_SUMMARY"

@@ -220,8 +220,8 @@ Um único repositório; ambientes separados por **overlays Kustomize**.
 flowchart TB
     subgraph Repo["Git Repository"]
         Base["manifests/base/<br/>Deployment, Service, Ingress"]
-        STG_OV["overlays/staging/<br/>tag: staging-latest ou :sha"]
-        PRD_OV["overlays/production/<br/>tag: v1.x — sync manual"]
+        STG_OV["overlays/staging/<br/>imagem por digest (sha256)"]
+        PRD_OV["overlays/production/<br/>mesmo digest promovido"]
         ArgoApps["gitops/argocd/applications/"]
     end
 
