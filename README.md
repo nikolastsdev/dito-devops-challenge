@@ -1,6 +1,6 @@
 # Dito DevOps Challenge
 
-Repositório de entrega do **Desafio DevOps III** — infraestrutura GCP, GitOps, CI/CD e controle de custos.
+Repositório de entrega do **Desafio DevOps III** — infraestrutura GCP, GitOps, CI/CD e controle de custos. 
 
 ## Estrutura
 
