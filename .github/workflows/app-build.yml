@@ -21,6 +21,7 @@ env:
   GCP_REGION: southamerica-east1
 
 jobs:
+  # ── 1. Build, lint, test e scan ─────────────────────────────────────────────
   build:
     name: Build & Scan
     runs-on: ubuntu-latest
@@ -47,8 +48,7 @@ jobs:
         run: npm run build
 
       - name: Build Docker image
-        run: |
-          docker build -t "${{ env.IMAGE_NAME }}:ci" .
+        run: docker build -t "${{ env.IMAGE_NAME }}:ci" .
 
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@v0.36.0
@@ -59,14 +59,23 @@ jobs:
           severity: CRITICAL,HIGH
         continue-on-error: true
 
+      - name: Upload Trivy results to GitHub Security
+        uses: github/codeql-action/upload-sarif@v3
+        if: always()
+        with:
+          sarif_file: app/trivy-results.sarif
+        continue-on-error: true
+
+  # ── 2. Push para staging + atualiza manifesto (GitOps) ──────────────────────
+  # Roda apenas em push para main — dispara deploy automático via ArgoCD
   push-staging:
-    name: Push Staging
+    name: Push & Deploy Staging
     needs: build
     if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
-      contents: read
+      contents: write  # necessário para commit do manifesto kustomize
       id-token: write
     steps:
       - uses: actions/checkout@v4
@@ -80,44 +89,31 @@ jobs:
         with:
           project_id: ${{ vars.GCP_PROJECT_ID_STAGING }}
 
-      - name: Push image to Artifact Registry (staging)
+      - name: Build & Push image (staging)
         run: |
           PROJECT="${{ vars.GCP_PROJECT_ID_STAGING }}"
           REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
           REPO="${REGISTRY}/${PROJECT}/dito-api-staging/${{ env.IMAGE_NAME }}"
           gcloud auth configure-docker "${REGISTRY}" --quiet
-          # Build e push com sha e staging-latest (ArgoCD usa staging-latest)
-          docker build -t "${REPO}:${{ github.sha }}" -t "${REPO}:staging-latest" app/
+          docker build -t "${REPO}:${{ github.sha }}" app/
           docker push "${REPO}:${{ github.sha }}"
-          docker push "${REPO}:staging-latest"
 
-  push-production:
-    name: Push Production
-    needs: push-staging
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
-    runs-on: ubuntu-latest
-    environment: production
-    permissions:
-      contents: read
-      id-token: write
-    steps:
-      - uses: actions/checkout@v4
-
-      - uses: google-github-actions/auth@v2
-        with:
-          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
-          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
-
-      - uses: google-github-actions/setup-gcloud@v2
-        with:
-          project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
-
-      - name: Push image to Artifact Registry (production)
+      - name: Update staging manifest (GitOps)
         run: |
-          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
-          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
-          REPO="${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}"
-          gcloud auth configure-docker "${REGISTRY}" --quiet
-          docker build -t "${REPO}:${{ github.sha }}" -t "${REPO}:production-latest" app/
-          docker push "${REPO}:${{ github.sha }}"
-          docker push "${REPO}:production-latest"
+          SHA="${{ github.sha }}"
+          FILE="manifests/overlays/staging/kustomization.yaml"
+
+          sed -i "s|newTag: .*|newTag: ${SHA}|" "${FILE}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${FILE}"
+          git diff --cached --quiet || git commit -m "chore(deploy): staging → ${SHA:0:7} [skip ci]"
+          git push origin main
+
+      - name: Summary
+        run: |
+          echo "### Deploy Staging" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SHA**: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image**: \`${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_STAGING }}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ArgoCD sincronizará automaticamente o staging" >> "$GITHUB_STEP_SUMMARY"
