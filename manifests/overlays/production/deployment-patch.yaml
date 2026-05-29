@@ -2,6 +2,7 @@ apiVersion: apps/v1
 kind: Deployment
 metadata:
   name: dito-api
+  namespace: dito-app
 spec:
   replicas: 3
   template:

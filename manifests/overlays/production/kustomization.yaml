@@ -3,11 +3,11 @@ kind: Kustomization
 
 namespace: dito-app
 
-namePrefix: production-
-
-commonLabels:
-  environment: production
-  app.kubernetes.io/version: production
+labels:
+  - pairs:
+      environment: production
+      app.kubernetes.io/version: production
+    includeSelectors: false
 
 resources:
   - ../../base
