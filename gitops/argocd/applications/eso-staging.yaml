@@ -9,6 +9,8 @@ metadata:
   annotations:
     # ESO deve subir antes da app (que tem ExternalSecret)
     argocd.argoproj.io/sync-wave: "-1"
+    # Server-side diff evita erro de schema (.status.terminatingReplicas) no diff
+    argocd.argoproj.io/compare-options: "ServerSideDiff=true"
 spec:
   project: infra
 
