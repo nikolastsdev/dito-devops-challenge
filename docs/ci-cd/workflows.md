@@ -6,27 +6,34 @@
 
 | Workflow | Trigger | Jobs |
 |----------|---------|------|
-| [`terraform.yml`](../../.github/workflows/terraform.yml) | PR/push `iac/**` | validate → plan-staging/production → apply-staging → apply-production |
-| [`app-build.yml`](../../.github/workflows/app-build.yml) | PR/push `app/**` | build + Trivy → push Artifact Registry |
+| [`terraform-staging.yml`](../../.github/workflows/terraform-staging.yml) | PR/push `iac/**` + dispatch | validate → plan → apply → bootstrap (apply só em main/dispatch) |
+| [`terraform-production.yml`](../../.github/workflows/terraform-production.yml) | dispatch (gated) | validate → plan \| apply → bootstrap |
+| [`terraform-destroy.yml`](../../.github/workflows/terraform-destroy.yml) | dispatch (gated + confirm) | drain → destroy staged (staging \| production) |
+| [`app-build.yml`](../../.github/workflows/app-build.yml) | PR/push `app/**` | build + Trivy → push por digest → `kustomize edit set image` staging |
+| [`app-promote.yml`](../../.github/workflows/app-promote.yml) | dispatch (gated) | copia digest staging→production → `kustomize edit set image` |
 | [`docs.yml`](../../.github/workflows/docs.yml) | push `docs/**` | MkDocs build → GitHub Pages |
 | [`pr-review.yml`](../../.github/workflows/pr-review.yml) | PR aberto | checklist automatizado |
 
-## Terraform pipeline
+## Terraform pipelines (separados por ciclo de vida)
 
 ```mermaid
 flowchart LR
-    PR[Pull Request] --> FMT[fmt check]
-    FMT --> VAL[validate]
-    VAL --> PLAN_S[plan staging]
-    VAL --> PLAN_P[plan production]
-
-    Main[merge main] --> STG[apply staging]
-    STG --> PROD[apply production]
-    PROD --> APPROVAL{environment gate}
+    subgraph STG["terraform-staging.yml"]
+        PR[Pull Request] --> PLAN_S[plan]
+        Main[push main] --> PLAN_S2[plan] --> APPLY_S[apply] --> BOOT_S[bootstrap]
+    end
+    subgraph PROD["terraform-production.yml (dispatch)"]
+        DISP[apply] --> GATE{environment gate}
+        GATE --> APPLY_P[plan + apply] --> BOOT_P[bootstrap]
+    end
+    subgraph DESTROY["terraform-destroy.yml (dispatch)"]
+        CONF[confirm + gate] --> DRAIN[drain] --> DEL[destroy staged]
+    end
 ```
 
-- **PR:** apenas plan — nunca apply
-- **main:** staging automático; production com `environment: production` (approval)
+- **staging:** PR = só plan; push em `main` = plan → apply → bootstrap (automático)
+- **production:** sempre manual (`workflow_dispatch`), com `environment: production` (approval). Uma única aprovação por execução
+- **destroy:** isolado, exige digitar o nome do ambiente + approval gate
 
 ## App pipeline
 

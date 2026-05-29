@@ -38,11 +38,18 @@ use_existing_ci_service_account = true
 manage_wif_identity_pool        = false
 existing_wif_provider           = "projects/747897055808/locations/global/workloadIdentityPools/github-pool/providers/github"
 
-# Image promotion: a SA CI de production lê o registry de staging para copiar
-# o mesmo digest (sem rebuild) durante o app-promote.yml.
-registry_additional_readers = [
-  "serviceAccount:dito-ci@dito-production.iam.gserviceaccount.com",
-]
+# Image promotion (cross-project): a SA CI de production lê o registry de
+# staging para copiar o mesmo digest (sem rebuild) no app-promote.yml.
+#
+# IMPORTANTE — ordem: o IAM de repositório do Artifact Registry valida que a SA
+# já existe. A SA dito-ci@dito-production só nasce no apply de production.
+# Por isso este grant fica vazio no 1º apply de staging e deve ser preenchido
+# DEPOIS que production existir, re-aplicando staging:
+#
+#   registry_additional_readers = [
+#     "serviceAccount:dito-ci@dito-production.iam.gserviceaccount.com",
+#   ]
+registry_additional_readers = []
 
 labels = {
   owner       = "nikolastsdev"

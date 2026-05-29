@@ -1,6 +1,6 @@
 # Diagramas de pipeline CI/CD
 
-Visão completa dos **4 workflows GitHub Actions**, gates de ambiente, promoção GitOps e integração com GCP.
+Visão completa dos workflows GitHub Actions, gates de ambiente, promoção GitOps e integração com GCP.
 
 ---
 
@@ -15,8 +15,11 @@ flowchart TB
     end
 
     subgraph Workflows[".github/workflows/"]
-        TF["terraform.yml"]
+        TF["terraform-staging.yml"]
+        TFP["terraform-production.yml"]
+        TFD["terraform-destroy.yml"]
         APP["app-build.yml"]
+        PROM["app-promote.yml"]
         DOCS["docs.yml"]
         REV["pr-review.yml"]
     end
@@ -38,31 +41,40 @@ flowchart TB
     PRAny --> REV
 
     TF --> STG_GCP
-    TF --> PRD_GCP
+    TFP -->|dispatch gated| PRD_GCP
+    TFD -->|dispatch gated| PRD_GCP
     APP --> AR
+    PROM -->|dispatch gated| AR
     DOCS --> Pages
     REV --> Comment
     APP -->|update overlay| STG_GCP
 ```
 
-| Workflow | Arquivo | Trigger (paths) | Merge `main` |
-|----------|---------|-----------------|--------------|
-| Terraform | `terraform.yml` | `iac/**`, `scripts/**` | apply staging → apply production |
-| App Build | `app-build.yml` | `app/**` | push imagem `:sha` |
+| Workflow | Arquivo | Trigger | Comportamento |
+|----------|---------|---------|---------------|
+| Terraform Staging | `terraform-staging.yml` | PR/push `iac/**` + dispatch | PR=plan; push main=plan→apply→bootstrap |
+| Terraform Production | `terraform-production.yml` | dispatch (gated) | plan \| apply→bootstrap (1 aprovação) |
+| Terraform Destroy | `terraform-destroy.yml` | dispatch (gated + confirm) | drain → destroy staged |
+| App Build | `app-build.yml` | PR/push `app/**` | build+Trivy → push por digest → overlay staging |
+| App Promote | `app-promote.yml` | dispatch (gated) | copia digest staging→production → overlay |
 | Documentation | `docs.yml` | `docs/**`, `mkdocs.yml` | deploy GitHub Pages |
 | PR Review | `pr-review.yml` | qualquer PR | comentário checklist |
 
 ---
 
-## 2. Pipeline Terraform (`terraform.yml`)
+## 2. Pipelines Terraform (separados por ciclo de vida)
 
-### 2.1 Pull Request — plan only
+Três workflows independentes evitam o grafo poluído de um único arquivo e
+isolam a operação destrutiva: `terraform-staging.yml`, `terraform-production.yml`
+e `terraform-destroy.yml`.
 
-Nunca aplica infra em PR. Valida sintaxe e gera planos para **ambos** os projects (se vars configuradas).
+### 2.1 Staging — automático (PR = plan, push main = apply)
+
+PR nunca aplica infra. Push em `main` segue o fluxo linear completo.
 
 ```mermaid
 flowchart TD
-    Start["PR com mudanças em iac/**"] --> Validate
+    Start["PR ou push em iac/**"] --> Validate
 
     subgraph Validate["Job: validate"]
         FMT["terraform fmt -check"]
@@ -70,65 +82,48 @@ flowchart TD
         VAL["terraform validate"]
     end
 
-    Validate --> PlanSTG["Job: plan-staging"]
-    Validate --> PlanPRD["Job: plan-production"]
-
-    PlanSTG --> AuthSTG["google-github-actions/auth<br/>Workload Identity Federation"]
-    AuthSTG --> InitSTG["init backends/staging.gcs.tfbackend"]
-    InitSTG --> PlanS["plan -var-file=staging.tfvars"]
-    PlanS --> ArtSTG["artifact: plan-staging.txt"]
-
-    PlanPRD --> AuthPRD["auth WIF"]
-    AuthPRD --> InitPRD["init backends/production.gcs.tfbackend"]
-    InitPRD --> PlanP["plan -var-file=production.tfvars"]
-    PlanP --> ArtPRD["artifact: plan-production.txt"]
+    Validate --> Plan["Job: plan (staging)"]
+    Plan -->|push main ou dispatch apply| Apply["Job: apply"]
+    Apply --> Bootstrap["Job: bootstrap<br/>ArgoCD + cert-manager + Traefik"]
 ```
 
-**Condições:**
-
-- `plan-staging`: roda se `vars.GCP_PROJECT_ID_STAGING != ''`
-- `plan-production`: roda se `vars.GCP_PROJECT_ID_PRODUCTION != ''`
+- `plan`: PR, push e dispatch (exceto `bootstrap`)
+- `apply`: só em push `main` ou dispatch `apply`
+- `bootstrap`: após apply com sucesso, ou dispatch `bootstrap`
 - Secret: `TF_VAR_db_admin_password` via `secrets.TF_VAR_DB_ADMIN_PASSWORD`
 
-### 2.2 Push `main` — apply com gates
+### 2.2 Production — manual e gated (`workflow_dispatch`)
+
+Production **não** roda em push para `main`. É sempre uma ação deliberada,
+escolhendo `plan`, `apply` ou `bootstrap`. A aprovação acontece uma única vez.
 
 ```mermaid
 flowchart TD
-    Merge["Merge em main<br/>paths: iac/**"] --> NeedPlan["needs: plan-staging"]
-    NeedPlan --> ApplySTG["Job: apply-staging"]
+    Disp["workflow_dispatch<br/>action: apply"] --> Gate{"GitHub Environment<br/>production<br/>Required reviewers"}
+    Gate -->|pendente| Wait["Job aguarda — nenhum step roda"]
+    Gate -->|aprovado| Apply
 
-    subgraph ApplySTG["environment: staging"]
-        A1["init staging backend"]
-        A2["terraform apply staging.tfvars<br/>-auto-approve"]
-    end
-
-    ApplySTG --> ApplyPRD["Job: apply-production"]
-    ApplyPRD --> Gate{"GitHub Environment<br/>production<br/>required reviewers?"}
-
-    Gate -->|aprovado| ApplyPRDJob["terraform apply production.tfvars"]
-    Gate -->|pendente| Wait["Pipeline aguarda"]
-
-    subgraph ApplyPRDJob["environment: production"]
+    subgraph Apply["Job: apply (environment: production)"]
         P1["init production backend"]
-        P2["apply production.tfvars"]
+        P2["plan -out=tfplan (auditoria)"]
+        P3["apply tfplan"]
     end
+
+    Apply --> Bootstrap["Job: bootstrap"]
 ```
 
 ```mermaid
 sequenceDiagram
     participant Dev as Developer
     participant GH as GitHub
-    participant GHA as terraform.yml
-    participant STG as GCP Staging
+    participant GHA as terraform-production.yml
     participant PRD as GCP Production
 
-    Dev->>GH: PR iac/ → review → merge main
-    GHA->>GHA: validate + plan (artifacts)
-    GHA->>STG: apply-staging (auto)
+    Dev->>GH: workflow_dispatch (action=apply)
     Note over GHA,PRD: environment gate
     GHA->>GH: aguarda approval "production"
-    Dev->>GH: aprova deploy production
-    GHA->>PRD: apply-production
+    Dev->>GH: aprova
+    GHA->>PRD: plan (auditoria) + apply
 ```
 
 **Autenticação GCP (todos os jobs apply/plan):**
@@ -280,20 +275,24 @@ flowchart TB
         E_PAGES["github-pages"]
     end
 
-    TF_STG["terraform apply-staging"] --> E_STG
-    TF_PRD["terraform apply-production"] --> E_PRD
-    APP_PUSH["app-build push"] --> E_STG
+    TF_STG["terraform-staging: apply"] --> E_STG
+    TF_PRD["terraform-production: apply"] --> E_PRD
+    TF_DEL["terraform-destroy"] --> E_PRD
+    APP_STG["app-build: deploy-staging"] --> E_STG
+    PROM["app-promote"] --> E_PRD
     DOCS_DEP["docs deploy"] --> E_PAGES
 
     E_PRD --> Reviewers["Required reviewers<br/>(configurar no repo)"]
 ```
 
-| Job | Environment | Proteção recomendada |
-|-----|-------------|----------------------|
-| `apply-staging` | `staging` | Opcional |
-| `apply-production` | `production` | **Required reviewers** |
-| `push` (app) | `staging` | Opcional |
-| `deploy` (docs) | `github-pages` | Padrão GitHub Pages |
+| Job | Workflow | Environment | Proteção recomendada |
+|-----|----------|-------------|----------------------|
+| `apply` | terraform-staging | `staging` | Opcional |
+| `apply` | terraform-production | `production` | **Required reviewers** |
+| `destroy` | terraform-destroy | `staging`/`production` | **Required reviewers** + confirm |
+| `deploy-staging` | app-build | `staging` | Opcional |
+| `promote` | app-promote | `production` | **Required reviewers** |
+| `deploy` | docs | `github-pages` | Padrão GitHub Pages |
 
 ---
 

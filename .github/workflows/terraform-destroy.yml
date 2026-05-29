@@ -1,0 +1,70 @@
+name: Terraform Destroy
+
+# Operação destrutiva e isolada (workflow_dispatch apenas).
+# Dupla proteção:
+#   1. Confirmação textual: digite o nome do ambiente no campo `confirm`.
+#   2. GitHub Environment gated (Required reviewers).
+on:
+  workflow_dispatch:
+    inputs:
+      environment:
+        description: 'Ambiente a destruir'
+        required: true
+        type: choice
+        options: [staging, production]
+      confirm:
+        description: 'Digite o nome do ambiente para confirmar (ex.: staging)'
+        required: true
+        type: string
+
+concurrency:
+  group: terraform-destroy-${{ github.event.inputs.environment }}
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: '1.11.3'
+  TF_IN_AUTOMATION: 'true'
+  WORKING_DIR: iac
+
+jobs:
+  destroy:
+    name: Destroy ${{ github.event.inputs.environment }}
+    if: github.event.inputs.confirm == github.event.inputs.environment
+    runs-on: ubuntu-latest
+    environment: ${{ github.event.inputs.environment }}
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    env:
+      ENVIRONMENT: ${{ github.event.inputs.environment }}
+      PROJECT_ID: ${{ github.event.inputs.environment == 'production' && vars.GCP_PROJECT_ID_PRODUCTION || vars.GCP_PROJECT_ID_STAGING }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ env.PROJECT_ID }}
+          install_components: gke-gcloud-auth-plugin
+      - name: Drain workloads (best-effort)
+        run: |
+          gcloud container clusters get-credentials "dito-gke-${ENVIRONMENT}" \
+            --region southamerica-east1 --project "${PROJECT_ID}" 2>/dev/null || true
+          kubectl delete applications --all -n argocd --ignore-not-found=true 2>/dev/null || true
+          kubectl delete namespace traefik dito-app --ignore-not-found=true 2>/dev/null || true
+      - run: terraform init -backend-config=backends/${{ env.ENVIRONMENT }}.gcs.tfbackend -reconfigure
+      - name: Terraform Destroy (staged)
+        env:
+          TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: |
+          chmod +x ../scripts/terraform-destroy.sh
+          ../scripts/terraform-destroy.sh "${ENVIRONMENT}"

@@ -1,0 +1,137 @@
+name: Terraform Production
+
+# Fluxo manual e gated de production (workflow_dispatch apenas):
+#   • plan       → preview gated
+#   • apply      → plan (auditoria) + apply, com aprovação obrigatória
+#   • bootstrap  → reaplica ArgoCD/cert-manager/Traefik no cluster
+#
+# A aprovação é exigida pelo GitHub Environment `production`
+# (Settings → Environments → production → Required reviewers) e acontece
+# UMA vez, ao iniciar o job — nenhum step roda antes de aprovar.
+on:
+  workflow_dispatch:
+    inputs:
+      action:
+        description: 'Ação'
+        required: true
+        default: plan
+        type: choice
+        options: [plan, apply, bootstrap]
+
+concurrency:
+  group: terraform-production
+  cancel-in-progress: false
+
+permissions:
+  contents: read
+  id-token: write
+
+env:
+  TF_VERSION: '1.11.3'
+  TF_IN_AUTOMATION: 'true'
+  WORKING_DIR: iac
+
+jobs:
+  validate:
+    name: Validate
+    runs-on: ubuntu-latest
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - run: terraform fmt -check -recursive
+      - run: terraform init -backend=false
+      - run: terraform validate
+
+  plan:
+    name: Plan
+    needs: validate
+    if: github.event.inputs.action == 'plan'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
+      - name: Terraform Plan
+        env:
+          TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: |
+          terraform plan -var-file=environments/production.tfvars \
+            -input=false -no-color | tee ../plan-production.txt
+      - uses: actions/upload-artifact@v4
+        with:
+          name: plan-production
+          path: plan-production.txt
+
+  apply:
+    name: Apply
+    needs: validate
+    if: github.event.inputs.action == 'apply'
+    runs-on: ubuntu-latest
+    environment: production
+    defaults:
+      run:
+        working-directory: ${{ env.WORKING_DIR }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: hashicorp/setup-terraform@v3
+        with:
+          terraform_version: ${{ env.TF_VERSION }}
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - run: terraform init -backend-config=backends/production.gcs.tfbackend -reconfigure
+      - name: Terraform Plan (auditoria pré-apply)
+        env:
+          TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: |
+          terraform plan -var-file=environments/production.tfvars \
+            -input=false -no-color -out=tfplan
+      - name: Terraform Apply
+        env:
+          TF_VAR_db_admin_password: ${{ secrets.TF_VAR_DB_ADMIN_PASSWORD }}
+        run: terraform apply -input=false tfplan
+
+  bootstrap:
+    name: Bootstrap Cluster
+    needs: [validate, apply]
+    if: |
+      always() && (
+        needs.apply.result == 'success' ||
+        github.event.inputs.action == 'bootstrap'
+      )
+    runs-on: ubuntu-latest
+    environment: production
+    steps:
+      - uses: actions/checkout@v4
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
+          install_components: gke-gcloud-auth-plugin
+      - uses: azure/setup-helm@v4
+        with:
+          version: v3.17.3
+      - name: Bootstrap cluster (idempotente)
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq gettext-base
+          chmod +x scripts/bootstrap-cluster.sh
+          ./scripts/bootstrap-cluster.sh production

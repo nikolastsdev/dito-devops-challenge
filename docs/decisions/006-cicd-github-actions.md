@@ -10,12 +10,15 @@ Pipeline CI/CD em GitHub Actions conforme estrutura `iac/`, `app/`, `manifests/`
 
 ## Decisão
 
-Quatro workflows:
+Workflows separados por ciclo de vida (evita grafo poluído e isola operação destrutiva):
 
 | Workflow | Responsabilidade |
 |----------|------------------|
-| `terraform.yml` | fmt, validate, plan (PR); apply staging/prod (main) |
-| `app-build.yml` | lint, build, Trivy, push OCIR |
+| `terraform-staging.yml` | fmt, validate, plan (PR); plan→apply→bootstrap (push main) |
+| `terraform-production.yml` | dispatch gated: plan \| apply→bootstrap (1 aprovação) |
+| `terraform-destroy.yml` | dispatch gated + confirm: drain → destroy staged |
+| `app-build.yml` | lint, build, Trivy, push por digest → overlay staging |
+| `app-promote.yml` | dispatch gated: copia digest staging→production |
 | `docs.yml` | MkDocs → GitHub Pages |
 | `pr-review.yml` | Checklist automatizado + comentário no PR |
 

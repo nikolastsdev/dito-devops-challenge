@@ -65,14 +65,16 @@ Ela cria toda a infraestrutura, incluindo o WIF. A partir daí, o pipeline assum
                             ▼
 ┌─────────────────────────────────────────────────────────────────┐
 │  FASE 4 — Pipeline assume (para sempre)                         │
-│  workflow: .github/workflows/terraform.yml                      │
+│  workflows: terraform-staging.yml / terraform-production.yml    │
 │  ─────────────────────────────────────────────────────────────  │
-│  PR com mudanças em iac/**                                      │
-│    └─ fmt-check → validate → plan (staging + production)        │
+│  PR com mudanças em iac/**  (terraform-staging.yml)             │
+│    └─ fmt-check → validate → plan staging                       │
 │                                                                 │
-│  merge em main                                                  │
-│    ├─ terraform apply staging    (automático)                   │
-│    └─ terraform apply production (aprovação manual no GitHub)   │
+│  merge em main  (terraform-staging.yml)                         │
+│    └─ plan → apply staging → bootstrap   (automático)           │
+│                                                                 │
+│  production  (terraform-production.yml — workflow_dispatch)     │
+│    └─ apply (aprovação manual no GitHub Environment)            │
 └─────────────────────────────────────────────────────────────────┘
 ```
 
@@ -153,7 +155,7 @@ gsutil cp "gs://dito-challenge-staging-tfstate/terraform/state/default.tfstate#<
 ### Em Pull Requests
 
 ```yaml
-# terraform.yml (simplificado)
+# terraform-staging.yml (simplificado)
 on:
   pull_request:
     paths: ['iac/**']
@@ -175,14 +177,16 @@ O `plan` é postado como comentário no PR para revisão.
 ### Em merge para `main`
 
 ```
-main branch push
+main branch push  (terraform-staging.yml)
     │
-    ├── apply staging  (automático, ~5 min)
-    │       terraform apply → state atualizado no GCS
-    │
-    └── apply production  (requer aprovação manual)
-            GitHub environment gate → revisor aprova
+    └── plan → apply staging → bootstrap  (automático, ~5 min)
             terraform apply → state atualizado no GCS
+
+production  (terraform-production.yml — workflow_dispatch, NÃO em push)
+    │
+    └── apply  (requer aprovação manual)
+            GitHub environment gate → revisor aprova
+            plan (auditoria) → apply → state atualizado no GCS
 ```
 
 ---
