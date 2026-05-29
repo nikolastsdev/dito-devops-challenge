@@ -19,9 +19,10 @@ spec:
     helm:
       releaseName: cert-manager
       values: |
+        # CRDs aplicados pelo bootstrap-cluster.sh via kubectl (antes do Helm).
+        # Nunca instalar CRDs via Helm hooks: ArgoCD não executa Helm hooks no sync.
         crds:
-          enabled: true
-          keep: true
+          enabled: false
         startupapicheck:
           enabled: false
 

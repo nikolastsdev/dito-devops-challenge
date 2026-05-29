@@ -1,0 +1,42 @@
+apiVersion: argoproj.io/v1alpha1
+kind: Application
+metadata:
+  name: eso-staging
+  namespace: argocd
+  labels:
+    app.kubernetes.io/name: external-secrets
+    environment: staging
+  annotations:
+    # ESO deve subir antes da app (que tem ExternalSecret)
+    argocd.argoproj.io/sync-wave: "-1"
+spec:
+  project: infra
+
+  source:
+    repoURL: https://charts.external-secrets.io
+    chart: external-secrets
+    targetRevision: "0.10.7"
+    helm:
+      releaseName: external-secrets
+      values: |
+        installCRDs: true
+        # CRDs gerenciados pelo chart — ArgoCD aplica via ServerSideApply
+        crds:
+          createClusterExternalSecret: true
+          createClusterSecretStore: true
+          createPushSecret: true
+
+  destination:
+    server: https://kubernetes.default.svc
+    namespace: external-secrets
+
+  syncPolicy:
+    automated:
+      prune: false
+      selfHeal: true
+    syncOptions:
+      - CreateNamespace=true
+      - ServerSideApply=true
+      - RespectIgnoreDifferences=true
+
+  revisionHistoryLimit: 3

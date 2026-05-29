@@ -78,34 +78,45 @@ wait_for_argocd_controller() {
 }
 
 install_cert_manager() {
-  if helm_release_exists cert-manager cert-manager && cert_manager_ready; then
-    skip "cert-manager já instalado e pronto (Helm)"
+  if cert_manager_ready; then
+    skip "cert-manager já pronto"
     return 0
   fi
 
   log "Criando namespace cert-manager..."
   kubectl create namespace cert-manager --dry-run=client -o yaml | kubectl apply -f -
 
+  # Recomendação oficial cert-manager para GitOps: aplicar CRDs separadamente via
+  # kubectl ANTES do Helm, nunca via hooks (ArgoCD não executa Helm hooks no sync).
+  # https://cert-manager.io/docs/installation/helm/#option-2-install-crds-as-part-of-the-helm-release
+  if ! crds_installed; then
+    log "Aplicando CRDs cert-manager ${CERT_MANAGER_VERSION}..."
+    kubectl apply -f \
+      "https://github.com/cert-manager/cert-manager/releases/download/${CERT_MANAGER_VERSION}/cert-manager.crds.yaml" \
+      --server-side=true || {
+      warn "Falha ao aplicar CRDs cert-manager — verificar conectividade"
+      return 1
+    }
+    # Aguarda CRDs serem estabelecidos antes de instalar o chart
+    log "Aguardando CRDs serem estabelecidos..."
+    kubectl wait --for=condition=Established crd/certificates.cert-manager.io \
+      --timeout=60s 2>/dev/null || warn "CRD certificates.cert-manager.io não estabelecido em 60s"
+  else
+    skip "CRDs cert-manager já presentes"
+  fi
+
   helm repo add jetstack https://charts.jetstack.io 2>/dev/null || true
   helm repo update jetstack >/dev/null
 
-  log "Instalando cert-manager ${CERT_MANAGER_CHART_VERSION} via Helm (sem --wait)..."
-  # Não usa --wait para não travar a pipeline; ArgoCD gerencia o estado depois
+  log "Instalando cert-manager ${CERT_MANAGER_CHART_VERSION} via Helm..."
+  # crds.enabled=false: CRDs já aplicados acima via kubectl (abordagem GitOps correta)
   helm upgrade --install cert-manager jetstack/cert-manager \
     --namespace cert-manager \
     --version "${CERT_MANAGER_CHART_VERSION}" \
-    --set crds.enabled=true \
-    --set crds.keep=true \
+    --set crds.enabled=false \
     --set startupapicheck.enabled=false \
+    --wait \
     --timeout 3m || warn "Helm cert-manager retornou aviso — verificar estado depois"
-
-  log "Aguardando deployments cert-manager (máx 120s, não bloqueia bootstrap)..."
-  for dep in cert-manager cert-manager-webhook cert-manager-cainjector; do
-    kubectl wait --for=condition=Available "deployment/${dep}" \
-      -n cert-manager --timeout=120s 2>/dev/null \
-      && skip "  ${dep} ok" \
-      || warn "  ${dep} ainda não pronto — seguindo bootstrap"
-  done
 }
 
 ensure_cluster_issuer() {
@@ -154,6 +165,7 @@ apply_infra_applications() {
   local apps=(
     "cert-manager-${ENV}"
     "cluster-issuers-${ENV}"
+    "eso-${ENV}"
     "traefik-${ENV}"
   )
 
