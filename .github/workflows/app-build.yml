@@ -117,3 +117,63 @@ jobs:
           echo "- **SHA**: \`${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- **Image**: \`${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_STAGING }}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}\`" >> "$GITHUB_STEP_SUMMARY"
           echo "- ArgoCD sincronizará automaticamente o staging" >> "$GITHUB_STEP_SUMMARY"
+
+  # ── 3. Promote para production (requer aprovação no GitHub Environment) ──────
+  # O job fica pendente até um reviewer aprovar em:
+  # GitHub → Settings → Environments → production → Required reviewers
+  promote-production:
+    name: Promote to Production
+    needs: push-staging
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
+    runs-on: ubuntu-latest
+    environment: production   # <- pausa aqui e pede aprovação
+    permissions:
+      contents: write
+      id-token: write
+    steps:
+      - uses: actions/checkout@v4
+        with:
+          ref: main   # sempre pega main atualizado após o commit do push-staging
+
+      - uses: google-github-actions/auth@v2
+        with:
+          workload_identity_provider: ${{ secrets.GCP_WORKLOAD_IDENTITY_PROVIDER }}
+          service_account: ${{ secrets.GCP_SERVICE_ACCOUNT }}
+
+      - uses: google-github-actions/setup-gcloud@v2
+        with:
+          project_id: ${{ vars.GCP_PROJECT_ID_PRODUCTION }}
+
+      - name: Build & Push image (production)
+        run: |
+          SHA="${{ github.sha }}"
+          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
+          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
+          REPO="${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}"
+          gcloud auth configure-docker "${REGISTRY}" --quiet
+          docker build -t "${REPO}:${SHA}" app/
+          docker push "${REPO}:${SHA}"
+
+      - name: Update production manifest (GitOps)
+        run: |
+          SHA="${{ github.sha }}"
+          PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
+          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
+          FILE="manifests/overlays/production/kustomization.yaml"
+
+          sed -i "s|newName: .*|newName: ${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}|" "${FILE}"
+          sed -i "s|newTag: .*|newTag: ${SHA}|" "${FILE}"
+
+          git config user.name "github-actions[bot]"
+          git config user.email "41898282+github-actions[bot]@users.noreply.github.com"
+          git add "${FILE}"
+          git diff --cached --quiet || git commit -m "chore(deploy): production → ${SHA:0:7} [skip ci]"
+          git push origin main
+
+      - name: Summary
+        run: |
+          SHA="${{ github.sha }}"
+          echo "### Promote Production" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **SHA**: \`${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- **Image**: \`${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_PRODUCTION }}/dito-api-production/${{ env.IMAGE_NAME }}:${SHA}\`" >> "$GITHUB_STEP_SUMMARY"
+          echo "- ArgoCD sincronizará automaticamente o production" >> "$GITHUB_STEP_SUMMARY"
