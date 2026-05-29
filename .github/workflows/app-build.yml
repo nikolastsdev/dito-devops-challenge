@@ -48,14 +48,12 @@ jobs:
 
       - name: Build Docker image
         run: |
-          PROJECT="${{ vars.GCP_PROJECT_ID_STAGING || 'dito-staging' }}"
-          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          docker build -t "$IMAGE" .
+          docker build -t "${{ env.IMAGE_NAME }}:ci" .
 
       - name: Trivy vulnerability scan
         uses: aquasecurity/trivy-action@0.28.0
         with:
-          image-ref: ${{ env.GCP_REGION }}-docker.pkg.dev/${{ vars.GCP_PROJECT_ID_STAGING || 'dito-staging' }}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}
+          image-ref: ${{ env.IMAGE_NAME }}:ci
           format: sarif
           output: trivy-results.sarif
           severity: CRITICAL,HIGH
@@ -64,7 +62,7 @@ jobs:
   push-staging:
     name: Push Staging
     needs: build
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.GCP_PROJECT_ID_STAGING != ''
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: staging
     permissions:
@@ -85,16 +83,18 @@ jobs:
       - name: Push image to Artifact Registry (staging)
         run: |
           PROJECT="${{ vars.GCP_PROJECT_ID_STAGING }}"
-          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT}/dito-api-staging/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-          docker build -t "$IMAGE" app/
-          docker push "$IMAGE"
-          echo "IMAGE=$IMAGE" >> "$GITHUB_ENV"
+          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
+          REPO="${REGISTRY}/${PROJECT}/dito-api-staging/${{ env.IMAGE_NAME }}"
+          gcloud auth configure-docker "${REGISTRY}" --quiet
+          # Build e push com sha e staging-latest (ArgoCD usa staging-latest)
+          docker build -t "${REPO}:${{ github.sha }}" -t "${REPO}:staging-latest" app/
+          docker push "${REPO}:${{ github.sha }}"
+          docker push "${REPO}:staging-latest"
 
   push-production:
     name: Push Production
     needs: push-staging
-    if: github.ref == 'refs/heads/main' && github.event_name == 'push' && vars.GCP_PROJECT_ID_PRODUCTION != ''
+    if: github.ref == 'refs/heads/main' && github.event_name == 'push'
     runs-on: ubuntu-latest
     environment: production
     permissions:
@@ -115,7 +115,9 @@ jobs:
       - name: Push image to Artifact Registry (production)
         run: |
           PROJECT="${{ vars.GCP_PROJECT_ID_PRODUCTION }}"
-          IMAGE="${{ env.GCP_REGION }}-docker.pkg.dev/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}:${{ github.sha }}"
-          gcloud auth configure-docker ${{ env.GCP_REGION }}-docker.pkg.dev --quiet
-          docker build -t "$IMAGE" app/
-          docker push "$IMAGE"
+          REGISTRY="${{ env.GCP_REGION }}-docker.pkg.dev"
+          REPO="${REGISTRY}/${PROJECT}/dito-api-production/${{ env.IMAGE_NAME }}"
+          gcloud auth configure-docker "${REGISTRY}" --quiet
+          docker build -t "${REPO}:${{ github.sha }}" -t "${REPO}:production-latest" app/
+          docker push "${REPO}:${{ github.sha }}"
+          docker push "${REPO}:production-latest"
