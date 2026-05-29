@@ -3,9 +3,19 @@ kind: Ingress
 metadata:
   name: groove
   namespace: dito-app
+  annotations:
+    # cert-manager ingress-shim: cria o Certificate a partir do bloco tls abaixo
+    cert-manager.io/cluster-issuer: letsencrypt-prod
 spec:
+  # Host nip.io ancorado no IP estático reservado (dito-traefik-staging = 34.39.130.83).
+  # Estável entre recriações do cluster porque o Traefik agora fixa esse IP.
+  tls:
+    - hosts:
+        - groove.34.39.130.83.nip.io
+      secretName: groove-tls
   rules:
-    - http:
+    - host: groove.34.39.130.83.nip.io
+      http:
         paths:
           - path: /
             pathType: Prefix

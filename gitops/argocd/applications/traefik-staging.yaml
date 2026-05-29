@@ -23,10 +23,15 @@ spec:
         deployment:
           replicas: 2
 
-        # Usa o IP estático reservado pelo Terraform
-        # Valor injetado manualmente ou via kustomize overlay após terraform output
+        # IP estático reservado pelo Terraform (google_compute_address dito-traefik-staging).
+        # loadBalancerClass habilita o NetLB regional externo (backend-service), que é
+        # o ÚNICO que honra a annotation load-balancer-ip-addresses em LB EXTERNO.
+        # Sem ele, o GKE cria um LB target-pool legado que IGNORA a annotation e pega
+        # IP efêmero. Campo imutável: requer recriar o Service (kubectl delete svc).
         service:
           type: LoadBalancer
+          spec:
+            loadBalancerClass: networking.gke.io/l4-regional-external
           annotations:
             networking.gke.io/load-balancer-ip-addresses: "dito-traefik-staging"
 

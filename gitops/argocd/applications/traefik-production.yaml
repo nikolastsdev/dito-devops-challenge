@@ -22,8 +22,12 @@ spec:
         deployment:
           replicas: 2
 
+        # Ver nota em traefik-staging.yaml: loadBalancerClass habilita o NetLB
+        # regional externo que honra a annotation de IP. Campo imutável.
         service:
           type: LoadBalancer
+          spec:
+            loadBalancerClass: networking.gke.io/l4-regional-external
           annotations:
             networking.gke.io/load-balancer-ip-addresses: "dito-traefik-production"
 
