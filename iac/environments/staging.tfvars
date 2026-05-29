@@ -23,7 +23,7 @@ cloud_sql_tier = "db-f1-micro"
 billing_account_id    = "01817D-297FE7-229CDF"
 budget_amount_brl     = 1700
 budget_alert_emails   = ["nikolas.t.s.dev@gmail.com"]
-enable_budget         = false # budget criado manualmente no Console
+enable_budget         = false # budget criado manualmente no 
 billing_account_scope = true
 
 enable_public_ingress = true

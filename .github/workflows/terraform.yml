@@ -59,7 +59,7 @@ jobs:
       - run: terraform validate
 
   # ── 2. Plan Staging ──────────────────────────────────────────────────────────
-  # Roda em: PR, push main, dispatch staging (plan|apply|bootstrap)
+  # Roda em: PR (qualquer branch), push main, dispatch staging (plan|apply|bootstrap)
   plan-staging:
     name: Plan Staging
     needs: validate
@@ -97,15 +97,14 @@ jobs:
           path: plan-staging.txt
 
   # ── 3. Plan Production ───────────────────────────────────────────────────────
-  # Roda em: PR, dispatch production (plan|apply|bootstrap)
+  # Roda em: dispatch production apenas (PR não dispara plan de production)
   plan-production:
     name: Plan Production
     needs: validate
     if: |
-      github.event_name == 'pull_request' ||
-      (github.event_name == 'workflow_dispatch' &&
-       github.event.inputs.environment == 'production' &&
-       github.event.inputs.action != 'destroy')
+      github.event_name == 'workflow_dispatch' &&
+      github.event.inputs.environment == 'production' &&
+      github.event.inputs.action != 'destroy'
     runs-on: ubuntu-latest
     environment: production
     defaults:
